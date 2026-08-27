@@ -1,0 +1,1 @@
+"""sctorznab application package."""
