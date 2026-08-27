@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     ffmpeg_path: str = Field(default="ffmpeg", alias="FFMPEG_PATH")
     max_retries: int = Field(default=2, alias="MAX_RETRIES")
     request_timeout: float = Field(default=20.0, alias="REQUEST_TIMEOUT")
+    locale: str = Field(default="it", alias="SC_LOCALE")
+    flaresolverr_url: str | None = Field(default=None, alias="FLARESOLVERR_URL")
+    flaresolverr_timeout_ms: int = Field(default=60000, alias="FLARESOLVERR_TIMEOUT_MS")
 
     @cached_property
     def quality_list(self) -> list[int]:

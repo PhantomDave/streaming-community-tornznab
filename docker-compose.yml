@@ -6,6 +6,16 @@ services:
       - "9118:9118"
     env_file:
       - .env
+    environment:
+      - FLARESOLVERR_URL=${FLARESOLVERR_URL:-}
     volumes:
       - ./data:/data
+    restart: unless-stopped
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - LOG_LEVEL=info
+    ports:
+      - "8191:8191"
     restart: unless-stopped
