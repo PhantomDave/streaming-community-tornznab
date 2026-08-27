@@ -17,3 +17,20 @@ v2160.m3u8
     assert [variant.resolution for variant in variants] == [2160, 720]
     assert variants[0].url == "https://cdn.example/v2160.m3u8"
     assert variants[1].bandwidth == 2800000
+
+
+def test_extract_m3u8_url_returns_none_when_missing() -> None:
+    assert _extract_m3u8_url("<html></html>") is None
+
+
+def test_parse_master_playlist_skips_missing_resolution_and_keeps_missing_bandwidth() -> None:
+    playlist = """#EXTM3U
+#EXT-X-STREAM-INF:CODECS="avc1.640029"
+ignored.m3u8
+#EXT-X-STREAM-INF:RESOLUTION=1280x720,CODECS="avc1.640029"
+v720.m3u8
+"""
+    variants = _parse_master_playlist(playlist, "https://cdn.example/master.m3u8")
+    assert [variant.resolution for variant in variants] == [720]
+    assert variants[0].url == "https://cdn.example/v720.m3u8"
+    assert variants[0].bandwidth is None

@@ -53,3 +53,30 @@ def test_cache_expiration(tmp_path) -> None:
 
     db.cache_set("playlist_cache", "expired", {"x": 1}, ttl_seconds=-1)
     assert db.cache_get("playlist_cache", "expired") is None
+
+
+def test_release_upsert_updates_selected_fields(tmp_path) -> None:
+    db = Database(str(tmp_path / "upsert.db"))
+    original = _sample_release("hash2")
+    db.upsert_release(original)
+
+    updated = _sample_release("hash2")
+    updated.release_name = "Dune.2021.2160p.WEB-DL.H265.ITA-SC"
+    updated.size_estimate = 654321
+    updated.source_url = "https://example.test/updated.m3u8"
+    db.upsert_release(updated)
+
+    stored = db.get_release("hash2")
+    assert stored is not None
+    assert stored.release_name == "Dune.2021.2160p.WEB-DL.H265.ITA-SC"
+    assert stored.size_estimate == 654321
+    assert stored.source_url == "https://example.test/updated.m3u8"
+    assert stored.title == "Dune"
+
+
+def test_categories_are_sorted_and_unique(tmp_path) -> None:
+    db = Database(str(tmp_path / "categories.db"))
+    db.ensure_category("sonarr")
+    db.ensure_category("radarr")
+    db.ensure_category("sonarr")
+    assert db.list_categories() == ["radarr", "sonarr"]
