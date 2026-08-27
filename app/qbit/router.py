@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Annotated
 import secrets
 
 from fastapi import APIRouter, Depends, Form, Query, Response
@@ -19,8 +18,8 @@ _sessions: set[str] = set()
 
 @router.post("/auth/login")
 async def auth_login(
-    username: Annotated[str, Form()],
-    password: Annotated[str, Form()],
+    username: str = Form(),
+    password: str = Form(),
 ) -> Response:
     if username != settings.qbit_username or password != settings.qbit_password:
         return Response(content="Fails.", status_code=403)
@@ -84,7 +83,7 @@ async def torrents_categories(db: Database = Depends(get_db)) -> dict[str, dict]
 
 @router.post("/torrents/createCategory")
 async def torrents_create_category(
-    category: Annotated[str, Form()],
+    category: str = Form(),
     db: Database = Depends(get_db),
 ) -> Response:
     db.ensure_category(category)
@@ -93,8 +92,8 @@ async def torrents_create_category(
 
 @router.post("/torrents/setCategory")
 async def torrents_set_category(
-    hashes: Annotated[str, Form()],
-    category: Annotated[str, Form()],
+    hashes: str = Form(),
+    category: str = Form(),
     db: Database = Depends(get_db),
 ) -> Response:
     db.ensure_category(category)
@@ -105,8 +104,8 @@ async def torrents_set_category(
 
 @router.post("/torrents/add")
 async def torrents_add(
-    urls: Annotated[str, Form()],
-    category: Annotated[str, Form(default="")],
+    urls: str = Form(),
+    category: str = Form(default=""),
     manager: DownloadManager = Depends(get_download_manager),
 ) -> Response:
     infohash = extract_infohash_from_magnet(urls)
@@ -121,8 +120,8 @@ async def torrents_add(
 
 @router.post("/torrents/delete")
 async def torrents_delete(
-    hashes: Annotated[str, Form()],
-    deleteFiles: Annotated[bool, Form(default=False)],
+    hashes: str = Form(),
+    deleteFiles: bool = Form(default=False),
     manager: DownloadManager = Depends(get_download_manager),
 ) -> Response:
     _ = deleteFiles
@@ -132,7 +131,7 @@ async def torrents_delete(
 
 @router.post("/torrents/pause")
 async def torrents_pause(
-    hashes: Annotated[str, Form()],
+    hashes: str = Form(),
     manager: DownloadManager = Depends(get_download_manager),
 ) -> Response:
     await manager.pause_hashes([value.strip().lower() for value in hashes.split("|") if value.strip()])
@@ -141,7 +140,7 @@ async def torrents_pause(
 
 @router.post("/torrents/resume")
 async def torrents_resume(
-    hashes: Annotated[str, Form()],
+    hashes: str = Form(),
     manager: DownloadManager = Depends(get_download_manager),
 ) -> Response:
     await manager.resume_hashes([value.strip().lower() for value in hashes.split("|") if value.strip()])

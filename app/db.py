@@ -16,12 +16,22 @@ def _utc_now() -> str:
 
 class Database:
     def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
+        self.db_path = self._resolve_db_path(db_path)
         self._lock = Lock()
-        parent = os.path.dirname(db_path)
+        parent = os.path.dirname(self.db_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
         self._init_schema()
+
+    def _resolve_db_path(self, requested_path: str) -> str:
+        parent = os.path.dirname(requested_path)
+        if not parent:
+            return requested_path
+        if os.access(parent, os.W_OK):
+            return requested_path
+        fallback_dir = os.path.join("/tmp", "sctorznab")
+        os.makedirs(fallback_dir, exist_ok=True)
+        return os.path.join(fallback_dir, os.path.basename(requested_path))
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, check_same_thread=False)
