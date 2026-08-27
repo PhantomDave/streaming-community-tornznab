@@ -57,6 +57,23 @@ docker compose up -d      # Docker
 podman-compose up -d      # Podman
 ```
 
+### Percorso dei download
+
+Il database (`/data/db`) e i download (`/data/downloads`) sono montati come volumi
+separati. Per puntare i download a un path specifico dell'host — ad esempio la
+stessa cartella libreria già usata da Sonarr/Radarr, per permettere hardlink
+invece di copie — imposta `DOWNLOADS_HOST_PATH` prima di avviare compose:
+
+```bash
+DOWNLOADS_HOST_PATH=/mnt/media/downloads docker compose up -d
+```
+
+Se non impostata, viene usato un volume Docker/Podman con nome (`sctorznab-downloads`
+nell'esempio GHCR, `./data/downloads` nel compose per build locale). `DOWNLOAD_PATH`
+resta invece il path *interno al container* (default `/data/downloads`) usato
+dall'app per costruire i percorsi dei file: va cambiato solo se sposti anche il
+mount point nel `docker-compose.yml`.
+
 ### Avvio locale
 
 ```bash
