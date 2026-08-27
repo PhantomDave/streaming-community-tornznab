@@ -37,10 +37,24 @@ L'app gira su FastAPI e ascolta di default sulla porta `9118`.
 docker build -t sctorznab .
 ```
 
-### Avvio con Docker Compose
+### Avvio con Docker Compose (build locale)
 
 ```bash
 docker compose up --build -d
+```
+
+### Avvio con immagine pre-compilata (Docker / Podman)
+
+Un file d'esempio con l'immagine pubblicata su GHCR è disponibile in
+[`docker-compose.example.yml`](docker-compose.example.yml).
+I nomi immagine sono completamente qualificati (`ghcr.io/...`) per garantire
+la compatibilità con Podman.
+
+```bash
+cp docker-compose.example.yml docker-compose.yml
+# Modifica le variabili d'ambiente nel file, poi:
+docker compose up -d      # Docker
+podman-compose up -d      # Podman
 ```
 
 ### Avvio locale

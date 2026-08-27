@@ -1,0 +1,60 @@
+# Example docker-compose file using the pre-built image from GHCR.
+# Fully qualified image names make this compatible with Podman.
+#
+# Usage:
+#   cp docker-compose.example.yml docker-compose.yml
+#   # Edit the environment variables below, then:
+#   docker compose up -d        # Docker
+#   podman-compose up -d        # Podman
+
+services:
+  sctorznab:
+    image: ghcr.io/phantomdave/streaming-community-tornznab:latest
+    container_name: sctorznab
+    ports:
+      - "9118:9118"
+    environment:
+      - SC_BASE_URL=https://streamingcommunity.example
+      - PUBLIC_URL=http://localhost:9118
+      - HOST=0.0.0.0
+      - PORT=9118
+      - TORZNAB_API_KEY=change-me
+      - QBIT_USERNAME=admin
+      - QBIT_PASSWORD=adminadmin
+      - DOWNLOAD_PATH=/data/downloads
+      - QUALITIES=1080,720,480
+      - PREFERRED_AUDIO=ita,eng
+      - RELEASE_GROUP=SC
+      - TMDB_API_KEY=
+      - MAX_CONCURRENT_DOWNLOADS=2
+      - PLAYLIST_CACHE_TTL=21600
+      - TITLE_CACHE_TTL=3600
+      - YTDLP_PATH=yt-dlp
+      - FFMPEG_PATH=ffmpeg
+      - DB_PATH=/data/db/sctorznab.db
+      - LOG_LEVEL=INFO
+      - MAX_RETRIES=2
+      - REQUEST_TIMEOUT=20
+      - USER_AGENT=Mozilla/5.0
+      - SC_LOCALE=it
+      # Set to http://flaresolverr:8191 if using the FlareSolverr service below
+      - FLARESOLVERR_URL=
+      - FLARESOLVERR_TIMEOUT_MS=60000
+    volumes:
+      - sctorznab-data:/data
+    restart: unless-stopped
+
+  # Optional: uncomment if you need FlareSolverr to bypass Cloudflare challenges.
+  # Set FLARESOLVERR_URL=http://flaresolverr:8191 in the sctorznab service above.
+  #
+  # flaresolverr:
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
+  #   container_name: flaresolverr
+  #   environment:
+  #     - LOG_LEVEL=info
+  #   ports:
+  #     - "8191:8191"
+  #   restart: unless-stopped
+
+volumes:
+  sctorznab-data:
