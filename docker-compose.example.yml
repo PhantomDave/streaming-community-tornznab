@@ -6,6 +6,10 @@
 #   # Edit the environment variables below, then:
 #   docker compose up -d        # Docker
 #   podman-compose up -d        # Podman
+#
+# DOWNLOADS_HOST_PATH points the download volume at a specific host folder
+# (e.g. the same library path Sonarr/Radarr already use, to allow hardlinks
+# instead of copies). Leave it unset to keep using the named volume below.
 
 services:
   sctorznab:
@@ -41,7 +45,8 @@ services:
       - FLARESOLVERR_URL=
       - FLARESOLVERR_TIMEOUT_MS=60000
     volumes:
-      - sctorznab-data:/data
+      - sctorznab-db:/data/db
+      - ${DOWNLOADS_HOST_PATH:-sctorznab-downloads}:/data/downloads
     restart: unless-stopped
 
   # Optional: uncomment if you need FlareSolverr to bypass Cloudflare challenges.
@@ -57,4 +62,5 @@ services:
   #   restart: unless-stopped
 
 volumes:
-  sctorznab-data:
+  sctorznab-db:
+  sctorznab-downloads:

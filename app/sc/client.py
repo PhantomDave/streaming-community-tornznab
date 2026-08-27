@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html as html_lib
 import json
+import logging
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -11,6 +12,8 @@ import httpx
 
 from app.config import Settings
 from app.db import Database
+
+logger = logging.getLogger(__name__)
 
 # Matches the standard Inertia.js SSR bootstrap: <div id="app" data-page="...json...">
 _DATA_PAGE_PATTERN = re.compile(r'data-page="([^"]+)"')
@@ -48,13 +51,16 @@ class StreamingCommunityClient:
         html_text = await self.get_text(path, params=params)
         match = _DATA_PAGE_PATTERN.search(html_text)
         if not match:
+            logger.error("SC request for %s did not include an Inertia data-page payload (len=%d)", path, len(html_text))
             raise RuntimeError(f"SC request for {path} did not include an Inertia data-page payload")
         raw = html_lib.unescape(match.group(1))
         try:
             payload = json.loads(raw)
         except ValueError as exc:
+            logger.error("SC request for %s returned an invalid Inertia payload: %s", path, exc)
             raise RuntimeError(f"SC request for {path} returned an invalid Inertia payload") from exc
         if not isinstance(payload, dict):
+            logger.error("SC request for %s returned an unexpected Inertia payload shape: %s", path, type(payload))
             raise RuntimeError(f"SC request for {path} returned an unexpected Inertia payload shape")
         return payload
 
@@ -72,18 +78,23 @@ class StreamingCommunityClient:
         last_exc: Exception | None = None
         for attempt in range(1, retries + 1):
             try:
+                logger.debug("SC request GET %s params=%s attempt=%d/%d", path, params, attempt, retries)
                 response = await self._client.get(path, params=params, headers=headers)
                 if response.status_code == 403 and self._settings.flaresolverr_url:
+                    logger.warning("SC request %s got 403, attempting FlareSolverr challenge", path)
                     await self._solve_with_flaresolverr(str(response.request.url))
                     response = await self._client.get(path, params=params, headers=headers)
                 response.raise_for_status()
+                logger.debug("SC request GET %s -> %d", path, response.status_code)
                 return response.json() if mode == "json" else response.text
             except (httpx.HTTPError, ValueError) as exc:
                 last_exc = exc
+                logger.warning("SC request GET %s failed on attempt %d/%d: %s", path, attempt, retries, exc)
                 if attempt < retries:
                     await asyncio.sleep(min(0.5 * attempt, 2.0))
                     continue
                 break
+        logger.error("SC request failed for %s after %d attempts: %s", path, retries, last_exc)
         raise RuntimeError(f"SC request failed for {path}") from last_exc
 
     async def _solve_with_flaresolverr(self, url: str) -> None:
@@ -97,6 +108,7 @@ class StreamingCommunityClient:
         if not flaresolverr_url:
             return
         timeout = self._settings.flaresolverr_timeout_ms / 1000 + 5
+        logger.info("Solving Cloudflare challenge for %s via FlareSolverr at %s", url, flaresolverr_url)
         async with httpx.AsyncClient(timeout=timeout) as solver_client:
             response = await solver_client.post(
                 flaresolverr_url,
@@ -109,6 +121,7 @@ class StreamingCommunityClient:
         if user_agent:
             self._client.headers["User-Agent"] = user_agent
         fallback_domain = urlparse(url).hostname or ""
+        cookie_count = 0
         for cookie in solution.get("cookies", []) or []:
             name = cookie.get("name")
             value = cookie.get("value")
@@ -118,6 +131,8 @@ class StreamingCommunityClient:
                     self._client.cookies.set(name, value, domain=domain)
                 else:
                     self._client.cookies.set(name, value)
+                cookie_count += 1
+        logger.info("FlareSolverr challenge solved for %s, adopted %d cookie(s)", url, cookie_count)
 
     def get_cached(self, cache_key: str, playlist: bool = False) -> Any | None:
         table = "playlist_cache" if playlist else "title_cache"

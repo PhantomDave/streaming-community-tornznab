@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from app.config import settings
 from app.models import Title
 from app.sc.client import StreamingCommunityClient
+
+logger = logging.getLogger(__name__)
 
 
 async def search_titles(client: StreamingCommunityClient, query: str) -> list[Title]:
@@ -14,6 +18,7 @@ async def search_titles(client: StreamingCommunityClient, query: str) -> list[Ti
     payload = await client.get_inertia_page(search_path, params={"q": query})
     # Extract titles from Inertia props structure
     entries = _extract_titles_from_inertia(payload)
+    logger.debug("SC search %r returned %d raw entries", query, len(entries))
     titles: list[Title] = []
     for item in entries:
         if not isinstance(item, dict):
@@ -29,6 +34,7 @@ async def search_titles(client: StreamingCommunityClient, query: str) -> list[Ti
         if not isinstance(tmdb_id, int):
             tmdb_id = None
         titles.append(Title(sc_id=sc_id, slug=slug, name=name, sc_type=sc_type, year=year, tmdb_id=tmdb_id))
+    logger.info("SC search %r matched %d title(s)", query, len(titles))
     return titles
 
 

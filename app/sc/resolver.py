@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html as html_lib
 import json
+import logging
 import re
 from dataclasses import asdict
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
@@ -9,6 +10,8 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 from app.config import settings
 from app.models import Variant
 from app.sc.client import StreamingCommunityClient
+
+logger = logging.getLogger(__name__)
 
 M3U8_PATTERN = re.compile(r"https?://[^\s\"']+\.m3u8[^\s\"']*")
 STREAM_INF_PATTERN = re.compile(r"#EXT-X-STREAM-INF:(?P<attrs>[^\n]+)\n(?P<url>[^\n]+)")
@@ -38,21 +41,32 @@ async def resolve_variants(
     cache_key = f"playlist:{sc_id}:{slug}:{season or 0}:{episode_id or 0}"
     cached = client.get_cached(cache_key, playlist=True)
     if isinstance(cached, list) and cached:
+        logger.debug("Playlist cache hit for %s (%d variant(s))", cache_key, len(cached))
         return [Variant(**entry) for entry in cached if isinstance(entry, dict)]
 
     # Use locale-prefixed iframe endpoint
     iframe_path = f"/{settings.locale}/iframe/{sc_id}"
     request_params = {"episode_id": episode_id} if episode_id else None
+    logger.info("Resolving stream for sc_id=%s slug=%s season=%s episode_id=%s", sc_id, slug, season, episode_id)
     iframe_html = await client.get_text(iframe_path, params=request_params)
     iframe_url = urljoin(settings.sc_base_url or "", iframe_path)
 
     resolved = await _resolve_master_playlist_url(client, iframe_html, iframe_url)
     if not resolved:
+        logger.warning("Could not resolve master playlist URL for sc_id=%s slug=%s", sc_id, slug)
         return []
     master_url, playlist_referer = resolved
+    logger.debug("Master playlist URL resolved for sc_id=%s: %s", sc_id, master_url)
 
     playlist_text = await client.get_text(master_url, headers={"Referer": playlist_referer})
     variants = _parse_master_playlist(playlist_text, master_url)
+    logger.info(
+        "Resolved %d variant(s) for sc_id=%s slug=%s: %s",
+        len(variants),
+        sc_id,
+        slug,
+        [v.resolution for v in variants],
+    )
     client.set_cached(
         cache_key,
         [asdict(variant) for variant in variants],

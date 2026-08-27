@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 
 from fastapi import APIRouter, Depends, Form, Query, Response
@@ -12,6 +13,7 @@ from app.magnet import extract_infohash_from_magnet
 from app.qbit.models import to_qbit_info, to_qbit_properties
 
 router = APIRouter(prefix="/api/v2", tags=["qbit"])
+logger = logging.getLogger(__name__)
 
 _sessions: set[str] = set()
 
@@ -22,9 +24,11 @@ async def auth_login(
     password: str = Form(),
 ) -> Response:
     if username != settings.qbit_username or password != settings.qbit_password:
+        logger.warning("qBit auth login failed for username=%s", username)
         return Response(content="Fails.", status_code=403)
     sid = secrets.token_hex(16)
     _sessions.add(sid)
+    logger.info("qBit auth login succeeded for username=%s", username)
     response = Response(content="Ok.")
     response.set_cookie("SID", sid, httponly=True)
     return response
@@ -55,6 +59,7 @@ async def torrents_info(
     for job in jobs:
         release = db.get_release(job.infohash)
         response.append(to_qbit_info(job, release))
+    logger.debug("torrents/info category=%s returned %d job(s)", category, len(response))
     return response
 
 
@@ -110,11 +115,15 @@ async def torrents_add(
 ) -> Response:
     infohash = extract_infohash_from_magnet(urls)
     if not infohash:
+        logger.warning("torrents/add rejected: could not extract infohash from urls=%r", urls)
         return Response(content="Fails.", status_code=400)
+    logger.info("torrents/add infohash=%s category=%s", infohash, category or "default")
     try:
         await manager.create_or_enqueue(infohash=infohash, category=category or "default")
     except ValueError:
+        logger.error("torrents/add failed: unknown release for infohash=%s", infohash)
         return Response(content="Fails.", status_code=404)
+    logger.info("torrents/add queued for infohash=%s", infohash)
     return Response(content="Ok.")
 
 
@@ -125,7 +134,9 @@ async def torrents_delete(
     manager: DownloadManager = Depends(get_download_manager),
 ) -> Response:
     _ = deleteFiles
-    await manager.delete_hashes([value.strip().lower() for value in hashes.split("|") if value.strip()])
+    hash_list = [value.strip().lower() for value in hashes.split("|") if value.strip()]
+    logger.info("torrents/delete hashes=%s deleteFiles=%s", hash_list, deleteFiles)
+    await manager.delete_hashes(hash_list)
     return Response(status_code=200)
 
 
@@ -134,7 +145,9 @@ async def torrents_pause(
     hashes: str = Form(),
     manager: DownloadManager = Depends(get_download_manager),
 ) -> Response:
-    await manager.pause_hashes([value.strip().lower() for value in hashes.split("|") if value.strip()])
+    hash_list = [value.strip().lower() for value in hashes.split("|") if value.strip()]
+    logger.info("torrents/pause hashes=%s", hash_list)
+    await manager.pause_hashes(hash_list)
     return Response(status_code=200)
 
 
@@ -143,7 +156,9 @@ async def torrents_resume(
     hashes: str = Form(),
     manager: DownloadManager = Depends(get_download_manager),
 ) -> Response:
-    await manager.resume_hashes([value.strip().lower() for value in hashes.split("|") if value.strip()])
+    hash_list = [value.strip().lower() for value in hashes.split("|") if value.strip()]
+    logger.info("torrents/resume hashes=%s", hash_list)
+    await manager.resume_hashes(hash_list)
     return Response(status_code=200)
 
 

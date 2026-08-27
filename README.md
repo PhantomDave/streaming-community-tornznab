@@ -57,6 +57,43 @@ docker compose up -d      # Docker
 podman-compose up -d      # Podman
 ```
 
+### Percorso dei download
+
+Il database (`/data/db`) e i download (`/data/downloads`) sono montati come volumi
+separati. Per puntare i download a un path specifico dell'host — ad esempio la
+stessa cartella libreria già usata da Sonarr/Radarr, per permettere hardlink
+invece di copie — imposta `DOWNLOADS_HOST_PATH` prima di avviare compose:
+
+```bash
+DOWNLOADS_HOST_PATH=/mnt/media/downloads docker compose up -d
+```
+
+Se non impostata, viene usato un volume Docker/Podman con nome (`sctorznab-downloads`
+nell'esempio GHCR, `./data/downloads` nel compose per build locale). `DOWNLOAD_PATH`
+resta invece il path *interno al container* (default `/data/downloads`) usato
+dall'app per costruire i percorsi dei file: va cambiato solo se sposti anche il
+mount point nel `docker-compose.yml`.
+
+**⚠️ Attenzione se stai aggiornando da una versione precedente**: prima di
+questa modifica `docker-compose.example.yml` montava un unico volume con nome
+`sctorznab-data:/data`. Il compose aggiornato usa due volumi nuovi e distinti
+(`sctorznab-db` e `sctorznab-downloads`): Docker/Podman li crea vuoti, il
+vecchio `sctorznab-data` non viene toccato né rimosso, ma l'app non lo vede
+più — DB e download già scaricati sembrerebbero spariti. Prima di eseguire
+`docker compose up -d` con il nuovo file, copia i dati dal volume esistente:
+
+```bash
+docker run --rm \
+  -v sctorznab-data:/old \
+  -v sctorznab-db:/new-db \
+  -v sctorznab-downloads:/new-downloads \
+  alpine sh -c "cp -a /old/db/. /new-db/ && cp -a /old/downloads/. /new-downloads/"
+```
+
+(sostituisci `docker` con `podman` se usi Podman). Chi usa il `docker-compose.yml`
+per build locale con bind mount (`./data/...`) non è interessato: i percorsi
+su disco restano invariati.
+
 ### Avvio locale
 
 ```bash
