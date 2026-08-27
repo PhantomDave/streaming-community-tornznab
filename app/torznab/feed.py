@@ -14,7 +14,7 @@ ET.register_namespace("torznab", TORZNAB_NS)
 
 
 def build_feed_xml(*, query: str, releases: list[Release]) -> str:
-    rss = ET.Element("rss", {"version": "2.0", "xmlns:torznab": TORZNAB_NS})
+    rss = ET.Element("rss", {"version": "2.0"})
     channel = ET.SubElement(rss, "channel")
     ET.SubElement(channel, "title").text = "sctorznab"
     ET.SubElement(channel, "description").text = "StreamingCommunity bridge"
