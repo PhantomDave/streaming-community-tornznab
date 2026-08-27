@@ -9,7 +9,8 @@ services:
     environment:
       - FLARESOLVERR_URL=${FLARESOLVERR_URL:-}
     volumes:
-      - ./data:/data
+      - ./data/db:/data/db
+      - ${DOWNLOADS_HOST_PATH:-./data/downloads}:/data/downloads
     restart: unless-stopped
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest

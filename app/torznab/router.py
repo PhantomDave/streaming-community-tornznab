@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -19,6 +20,7 @@ from app.torznab.naming import build_release_name
 
 router = APIRouter(prefix="/torznab", tags=["torznab"])
 _DISCOVERY_TERMS = ("Dune", "Inception", "Breaking Bad", "Matrix")
+logger = logging.getLogger(__name__)
 
 
 @router.get("/api")
@@ -37,13 +39,17 @@ async def torznab_api(
     db: Database = Depends(get_db),
     sc_client: StreamingCommunityClient = Depends(get_sc_client),
 ) -> Response:
+    logger.info("Torznab request t=%s q=%r cat=%s imdbid=%s tmdbid=%s tvdbid=%s season=%s ep=%s", t, q, cat, imdbid, tmdbid, tvdbid, season, ep)
+
     if t == "caps":
         return Response(content=build_caps_xml(), media_type="application/xml")
 
     if apikey != settings.torznab_api_key:
+        logger.warning("Torznab request rejected: invalid API key")
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     if t not in {"search", "tvsearch", "movie"}:
+        logger.warning("Torznab request rejected: unsupported function t=%s", t)
         raise HTTPException(status_code=400, detail="Unsupported Torznab function")
 
     query = _build_query(q=q, imdbid=imdbid, tmdbid=tmdbid, tvdbid=tvdbid)
@@ -52,6 +58,7 @@ async def torznab_api(
             return Response(content=build_feed_xml(query="", releases=[]), media_type="application/xml")
         cached_releases = db.list_releases(limit=limit, offset=offset)
         if cached_releases:
+            logger.info("Torznab empty-query search served %d cached release(s)", len(cached_releases))
             return Response(content=build_feed_xml(query="", releases=cached_releases), media_type="application/xml")
         titles = await _discover_titles(sc_client)
         releases = await _build_releases(
@@ -62,6 +69,7 @@ async def torznab_api(
             season=season,
             episode=ep,
         )
+        logger.info("Torznab discovery search built %d release(s) from %d title(s)", len(releases), len(titles))
         return Response(content=build_feed_xml(query="", releases=releases[offset : offset + limit]), media_type="application/xml")
 
     titles = await _safe_search(sc_client, query)
@@ -74,6 +82,7 @@ async def torznab_api(
         season=season,
         episode=ep,
     )
+    logger.info("Torznab search t=%s q=%r built %d release(s) from %d title(s)", t, query, len(releases), len(sliced))
     return Response(content=build_feed_xml(query=query, releases=releases), media_type="application/xml")
 
 
@@ -81,7 +90,9 @@ async def torznab_api(
 async def torrent_download(infohash: str, db: Database = Depends(get_db)) -> Response:
     release = db.get_release(infohash.lower())
     if not release:
+        logger.warning("Torrent stub request for unknown infohash=%s", infohash)
         raise HTTPException(status_code=404, detail="Unknown release")
+    logger.info("Serving torrent stub for %s (%s)", infohash, release.release_name)
     payload = torrent_stub_payload(release.infohash, release.release_name)
     return Response(content=payload, media_type="application/x-bittorrent")
 
