@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.config import settings
 from app.models import Title
 from app.sc.client import StreamingCommunityClient
 
@@ -7,8 +8,12 @@ from app.sc.client import StreamingCommunityClient
 async def search_titles(client: StreamingCommunityClient, query: str) -> list[Title]:
     if not query.strip():
         return []
-    payload = await client.get_json("/api/search", params={"q": query})
-    entries = payload.get("data", []) if isinstance(payload, dict) else []
+    # Use locale-prefixed search endpoint (e.g., /it/search); the site renders
+    # full HTML with the Inertia page payload embedded in a data-page attribute.
+    search_path = f"/{settings.locale}/search"
+    payload = await client.get_inertia_page(search_path, params={"q": query})
+    # Extract titles from Inertia props structure
+    entries = _extract_titles_from_inertia(payload)
     titles: list[Title] = []
     for item in entries:
         if not isinstance(item, dict):
@@ -25,6 +30,28 @@ async def search_titles(client: StreamingCommunityClient, query: str) -> list[Ti
             tmdb_id = None
         titles.append(Title(sc_id=sc_id, slug=slug, name=name, sc_type=sc_type, year=year, tmdb_id=tmdb_id))
     return titles
+
+
+def _extract_titles_from_inertia(payload: dict) -> list:
+    """Extract titles from Inertia.js response structure.
+    
+    Inertia response format:
+    {
+        "component": "...",
+        "props": {
+            "titles": [...],
+            ...
+        },
+        ...
+    }
+    """
+    if not isinstance(payload, dict):
+        return []
+    props = payload.get("props", {})
+    if not isinstance(props, dict):
+        return []
+    titles = props.get("titles", [])
+    return titles if isinstance(titles, list) else []
 
 
 def _extract_year(item: dict) -> int | None:
