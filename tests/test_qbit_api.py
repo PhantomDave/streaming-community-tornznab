@@ -36,7 +36,16 @@ def test_qbit_app_version() -> None:
     with TestClient(app) as client:
         response = client.get("/api/v2/app/version")
         assert response.status_code == 200
-        assert response.json() == "v4.6.0"
+        assert "text/plain" in response.headers["content-type"]
+        assert response.text == "v4.6.0"
+
+
+def test_qbit_webapi_version() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/v2/app/webapiVersion")
+        assert response.status_code == 200
+        assert "text/plain" in response.headers["content-type"]
+        assert response.text == "2.9.2"
 
 
 def test_torznab_caps() -> None:

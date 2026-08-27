@@ -18,6 +18,7 @@ from app.torznab.feed import build_feed_xml
 from app.torznab.naming import build_release_name
 
 router = APIRouter(prefix="/torznab", tags=["torznab"])
+_DISCOVERY_TERMS = ("Dune", "Inception", "Breaking Bad", "Matrix")
 
 
 @router.get("/api")
@@ -47,7 +48,21 @@ async def torznab_api(
 
     query = _build_query(q=q, imdbid=imdbid, tmdbid=tmdbid, tvdbid=tvdbid)
     if not query:
-        return Response(content=build_feed_xml(query="", releases=[]), media_type="application/xml")
+        if t != "search":
+            return Response(content=build_feed_xml(query="", releases=[]), media_type="application/xml")
+        cached_releases = db.list_releases(limit=limit, offset=offset)
+        if cached_releases:
+            return Response(content=build_feed_xml(query="", releases=cached_releases), media_type="application/xml")
+        titles = await _discover_titles(sc_client)
+        releases = await _build_releases(
+            db,
+            sc_client,
+            titles[: limit + offset],
+            search_type=t,
+            season=season,
+            episode=ep,
+        )
+        return Response(content=build_feed_xml(query="", releases=releases[offset : offset + limit]), media_type="application/xml")
 
     titles = await _safe_search(sc_client, query)
     sliced = titles[offset : offset + limit]
@@ -85,6 +100,14 @@ async def _safe_search(sc_client: StreamingCommunityClient, query: str) -> list[
         return await search_titles(sc_client, query)
     except Exception:
         return []
+
+
+async def _discover_titles(sc_client: StreamingCommunityClient) -> list[Title]:
+    for term in _DISCOVERY_TERMS:
+        titles = await _safe_search(sc_client, term)
+        if titles:
+            return titles
+    return []
 
 
 async def _build_releases(

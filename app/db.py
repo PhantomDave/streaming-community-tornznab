@@ -126,6 +126,14 @@ class Database:
             return None
         return Release(**dict(row))
 
+    def list_releases(self, *, limit: int = 50, offset: int = 0) -> list[Release]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM releases ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [Release(**dict(row)) for row in rows]
+
     def create_job(self, job_id: str, infohash: str, category: str, save_path: str, content_path: str) -> Job:
         now = _utc_now()
         with self._lock, self._connect() as conn:

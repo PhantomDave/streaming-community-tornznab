@@ -45,9 +45,41 @@ def test_torznab_unsupported_function_returns_400() -> None:
     assert response.status_code == 400
 
 
-def test_torznab_empty_query_returns_empty_feed() -> None:
+def test_torznab_empty_query_returns_discovery_feed(tmp_path, monkeypatch) -> None:
+    db = Database(str(tmp_path / "torznab.db"))
+    search_queries: list[str] = []
+
+    async def fake_search_titles(_client, query: str) -> list[Title]:
+        search_queries.append(query)
+        if query == "Dune":
+            return [Title(sc_id=1, slug="dune", name="Dune", sc_type="movie", year=2021)]
+        return []
+
+    async def fake_resolve_variants(_client, *, sc_id: int, slug: str, season: int | None, episode_id: int | None) -> list[Variant]:
+        assert (sc_id, slug, season, episode_id) == (1, "dune", None, None)
+        return [Variant(resolution=1080, bandwidth=2_800_000, url="https://cdn.example/video.m3u8", codecs="avc1.640028")]
+
+    monkeypatch.setattr(torznab_router, "search_titles", fake_search_titles)
+    monkeypatch.setattr(torznab_router, "resolve_variants", fake_resolve_variants)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_sc_client] = lambda: object()
+    try:
+        with TestClient(app) as client:
+            response = client.get("/torznab/api", params={"t": "search", "apikey": settings.torznab_api_key})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    root = _parse_feed(response.text)
+    items = root.findall("./channel/item")
+    assert len(items) == 1
+    assert items[0].findtext("title") == "Dune.2021.1080p.WEB-DL.H264.ITA-SC"
+    assert search_queries == ["Dune"]
+
+
+def test_torznab_blank_tvsearch_returns_empty_feed() -> None:
     with TestClient(app) as client:
-        response = client.get("/torznab/api", params={"t": "search", "apikey": settings.torznab_api_key})
+        response = client.get("/torznab/api", params={"t": "tvsearch", "apikey": settings.torznab_api_key})
     assert response.status_code == 200
     root = _parse_feed(response.text)
     assert root.findall("./channel/item") == []

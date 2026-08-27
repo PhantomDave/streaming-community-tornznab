@@ -31,13 +31,13 @@ async def auth_login(
 
 
 @router.get("/app/version")
-async def app_version() -> str:
-    return "v4.6.0"
+async def app_version() -> Response:
+    return Response(content="v4.6.0", media_type="text/plain")
 
 
 @router.get("/app/webapiVersion")
-async def app_webapi_version() -> str:
-    return "2.9.2"
+async def app_webapi_version() -> Response:
+    return Response(content="2.9.2", media_type="text/plain")
 
 
 @router.get("/app/preferences")
