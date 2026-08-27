@@ -46,7 +46,9 @@ async def app_webapi_version() -> Response:
 
 @router.get("/app/preferences")
 async def app_preferences() -> dict:
-    return {"save_path": settings.download_path, "web_ui_port": settings.port}
+    # Radarr/Sonarr refuse trackerless magnets (which is all we ever hand out,
+    # since the infohash is synthetic) unless the client reports DHT enabled.
+    return {"save_path": settings.download_path, "web_ui_port": settings.port, "dht": True}
 
 
 @router.get("/torrents/info")
