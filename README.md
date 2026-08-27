@@ -1,4 +1,4 @@
-# Piano di progetto — Helper Torznab + qBittorrent per StreamingCommunity
+# sctorznab — Helper Torznab + qBittorrent per StreamingCommunity
 
 > Bridge in **Python (FastAPI + yt-dlp)** che espone un **indexer Torznab** per Prowlarr e un
 > **download client compatibile qBittorrent** per Sonarr/Radarr. Poiché il sito fornisce solo
@@ -10,6 +10,57 @@
 - **Porta di default:** `9118`
 - **Target:** Radarr (film) · Sonarr (serie TV) · Prowlarr (indexer)
 - **Sito:** istanza tipo *StreamingCommunity* (accesso legale dichiarato), **senza autenticazione**
+
+---
+
+## Uso rapido
+
+### Avvio con Docker Compose
+1. Copia il file di esempio e personalizza almeno `SC_BASE_URL`, `PUBLIC_URL`, `TORZNAB_API_KEY` e i path sotto `/data`:
+   ```bash
+   cp .env.example .env
+   ```
+2. Avvia il servizio:
+   ```bash
+   docker compose up --build -d
+   ```
+3. Verifica che sia attivo:
+   ```bash
+   curl http://localhost:9118/health
+   curl "http://localhost:9118/torznab/api?t=caps"
+   ```
+
+### Avvio locale
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+uvicorn app.main:app --host 0.0.0.0 --port 9118
+```
+
+### Configurazione in Prowlarr / Sonarr / Radarr
+- **Prowlarr** → *Add Indexer* → *Generic Torznab*:
+  - URL: `http://<host>:9118/torznab/api`
+  - API Key: valore di `TORZNAB_API_KEY`
+- **Sonarr / Radarr** → *Download Clients* → *qBittorrent*:
+  - Host: `<host>`
+  - Port: `9118`
+  - Username / Password: `QBIT_USERNAME` / `QBIT_PASSWORD`
+  - Category: `sonarr` oppure `radarr`
+
+### Come funziona nell'uso quotidiano
+1. Prowlarr interroga `/torznab/api` e riceve una release per ogni qualità disponibile.
+2. Sonarr/Radarr inviano il magnet sintetico a `/api/v2/torrents/add`.
+3. Il bridge risolve lo stream HLS e scarica il file finale in `DOWNLOAD_PATH/<category>/<release>/`.
+4. Quando lo stato diventa completato, Sonarr/Radarr importano il file come se arrivasse da qBittorrent.
+
+### Variabili minime consigliate
+- `SC_BASE_URL`: dominio dell'istanza StreamingCommunity.
+- `PUBLIC_URL`: URL pubblica usata nei link Torznab.
+- `TORZNAB_API_KEY`: chiave usata da Prowlarr.
+- `DOWNLOAD_PATH`: cartella condivisa con Sonarr/Radarr.
+- `DB_PATH`: percorso del database SQLite persistente.
 
 ---
 
@@ -559,7 +610,7 @@ services:
 > per permettere hardlink/atomic-move durante l'import.
 
 ### 14.1 Wiring in *Arr
-- **Prowlarr →** Add Indexer → *Generic Torznab*: URL `http://sctorznab:9118/torznab`, API Key = `TORZNAB_API_KEY`.
+- **Prowlarr →** Add Indexer → *Generic Torznab*: URL `http://sctorznab:9118/torznab/api`, API Key = `TORZNAB_API_KEY`.
 - **Sonarr/Radarr →** Settings → Download Clients → *qBittorrent*: host `sctorznab`, porta `9118`,
   user/pass = `QBIT_*`, categoria `sonarr`/`radarr`.
 
