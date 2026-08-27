@@ -133,10 +133,9 @@ async def torrents_delete(
     deleteFiles: bool = Form(default=False),
     manager: DownloadManager = Depends(get_download_manager),
 ) -> Response:
-    _ = deleteFiles
     hash_list = [value.strip().lower() for value in hashes.split("|") if value.strip()]
     logger.info("torrents/delete hashes=%s deleteFiles=%s", hash_list, deleteFiles)
-    await manager.delete_hashes(hash_list)
+    await manager.delete_hashes(hash_list, delete_files=deleteFiles)
     return Response(status_code=200)
 
 

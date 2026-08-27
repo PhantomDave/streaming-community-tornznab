@@ -26,7 +26,13 @@ _LOG_PROGRESS_STEP = 10.0
 logger = logging.getLogger(__name__)
 
 
-async def run_download_job(settings: Settings, db: Database, job: Job, release: Release) -> None:
+async def run_download_job(
+    settings: Settings,
+    db: Database,
+    job: Job,
+    release: Release,
+    process_registry: dict[str, asyncio.subprocess.Process] | None = None,
+) -> None:
     output_path = build_output_path(settings, job.category, release.release_name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -49,39 +55,54 @@ async def run_download_job(settings: Settings, db: Database, job: Job, release: 
         db.update_job_state(job.id, state="error", error=f"yt-dlp not found: {exc}")
         return
 
-    assert process.stdout is not None
-    last_logged_progress = -1.0
-    duration_seconds: float | None = None
-    output_lines: list[str] = []
-    async for raw_line in process.stdout:
-        line = raw_line.decode("utf-8", errors="ignore").strip()
-        if line:
-            output_lines.append(line)
-            if len(output_lines) > 50:
-                output_lines.pop(0)
+    if process_registry is not None:
+        process_registry[job.id] = process
 
-        progress = _parse_progress(line)
-        if progress is None and duration_seconds is None:
-            duration_seconds = _parse_ffmpeg_duration(line)
-            if duration_seconds is not None:
-                logger.debug("Job id=%s: ffmpeg input duration is %.1fs", job.id, duration_seconds)
-        if progress is None and duration_seconds is not None:
-            progress = _parse_ffmpeg_progress(line, duration_seconds)
+    try:
+        assert process.stdout is not None
+        last_logged_progress = -1.0
+        duration_seconds: float | None = None
+        output_lines: list[str] = []
+        async for raw_line in process.stdout:
+            line = raw_line.decode("utf-8", errors="ignore").strip()
+            if line:
+                output_lines.append(line)
+                if len(output_lines) > 50:
+                    output_lines.pop(0)
 
-        if progress is not None:
-            db.update_job_state(
-                job.id,
-                progress=progress / 100.0,
-                bytes_done=int(release.size_estimate * (progress / 100.0)),
-                bytes_total=release.size_estimate,
-            )
-            if progress - last_logged_progress >= _LOG_PROGRESS_STEP or progress >= 100.0:
-                logger.info("Job id=%s: progress %.1f%%", job.id, progress)
-                last_logged_progress = progress
-        elif line:
-            logger.debug("Job id=%s: yt-dlp: %s", job.id, line)
+            progress = _parse_progress(line)
+            if progress is None and duration_seconds is None:
+                duration_seconds = _parse_ffmpeg_duration(line)
+                if duration_seconds is not None:
+                    logger.debug("Job id=%s: ffmpeg input duration is %.1fs", job.id, duration_seconds)
+            if progress is None and duration_seconds is not None:
+                progress = _parse_ffmpeg_progress(line, duration_seconds)
 
-    code = await process.wait()
+            if progress is not None:
+                db.update_job_state(
+                    job.id,
+                    progress=progress / 100.0,
+                    bytes_done=int(release.size_estimate * (progress / 100.0)),
+                    bytes_total=release.size_estimate,
+                )
+                if progress - last_logged_progress >= _LOG_PROGRESS_STEP or progress >= 100.0:
+                    logger.info("Job id=%s: progress %.1f%%", job.id, progress)
+                    last_logged_progress = progress
+            elif line:
+                logger.debug("Job id=%s: yt-dlp: %s", job.id, line)
+
+        code = await process.wait()
+    finally:
+        if process_registry is not None:
+            process_registry.pop(job.id, None)
+
+    # A pause/delete request may have terminated the process on purpose; in that
+    # case the job's state (or absence, if deleted) already reflects the intent
+    # and must not be clobbered with a completed/error outcome.
+    current = db.get_job(job.id)
+    if current is None or current.state == "paused":
+        return
+
     if code != 0:
         tail = " | ".join(output_lines[-10:])
         logger.error("Job id=%s: yt-dlp exited with code %d. Last output: %s", job.id, code, tail)

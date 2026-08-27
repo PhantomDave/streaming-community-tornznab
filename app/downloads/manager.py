@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+import shutil
 import uuid
 
 from app.config import Settings
@@ -20,6 +21,7 @@ class DownloadManager:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._workers: list[asyncio.Task] = []
         self._running = False
+        self._processes: dict[str, asyncio.subprocess.Process] = {}
 
     async def start(self) -> None:
         if self._running:
@@ -67,7 +69,11 @@ class DownloadManager:
             job = self._db.get_job_by_infohash(hash_value)
             if job and job.state in {"queued", "downloading", "resolving"}:
                 logger.info("Pausing job id=%s infohash=%s", job.id, hash_value)
+                # Set the paused state before terminating the process, so the
+                # worker's post-termination state check sees "paused" and does
+                # not overwrite it with a completed/error outcome.
                 self._db.update_job_state(job.id, state="paused")
+                self._terminate_process(job.id)
 
     async def resume_hashes(self, hashes: list[str]) -> None:
         for hash_value in hashes:
@@ -77,8 +83,29 @@ class DownloadManager:
                 self._db.update_job_state(job.id, state="queued", error="")
                 await self._queue.put(job.id)
 
-    async def delete_hashes(self, hashes: list[str]) -> None:
+    async def delete_hashes(self, hashes: list[str], *, delete_files: bool = False) -> None:
+        for hash_value in hashes:
+            job = self._db.get_job_by_infohash(hash_value)
+            if not job:
+                continue
+            self._terminate_process(job.id)
+            if delete_files:
+                self._remove_job_files(job)
         self._db.delete_job(hashes)
+
+    def _terminate_process(self, job_id: str) -> None:
+        process = self._processes.get(job_id)
+        if process is None or process.returncode is not None:
+            return
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+
+    def _remove_job_files(self, job: Job) -> None:
+        target = Path(job.content_path).parent
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
 
     async def _worker_loop(self) -> None:
         while self._running:
@@ -103,9 +130,17 @@ class DownloadManager:
         self._db.update_job_state(job_id, state="resolving", error="")
         for attempt in range(self._settings.max_retries + 1):
             logger.info("Running job id=%s attempt=%d/%d release=%s", job_id, attempt + 1, self._settings.max_retries + 1, release.release_name)
-            await run_download_job(self._settings, self._db, self._db.get_job(job_id) or job, release)
+            await run_download_job(
+                self._settings,
+                self._db,
+                self._db.get_job(job_id) or job,
+                release,
+                self._processes,
+            )
             refreshed = self._db.get_job(job_id)
-            if refreshed and refreshed.state == "completed":
+            if refreshed is None or refreshed.state == "paused":
+                return
+            if refreshed.state == "completed":
                 logger.info("Job id=%s completed successfully", job_id)
                 return
             if attempt < self._settings.max_retries:
