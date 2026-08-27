@@ -1,0 +1,11 @@
+services:
+  sctorznab:
+    build: .
+    container_name: sctorznab
+    ports:
+      - "9118:9118"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
