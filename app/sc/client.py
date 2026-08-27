@@ -5,6 +5,7 @@ import html as html_lib
 import json
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -107,11 +108,16 @@ class StreamingCommunityClient:
         user_agent = solution.get("userAgent")
         if user_agent:
             self._client.headers["User-Agent"] = user_agent
+        fallback_domain = urlparse(url).hostname or ""
         for cookie in solution.get("cookies", []) or []:
             name = cookie.get("name")
             value = cookie.get("value")
             if name and value:
-                self._client.cookies.set(name, value, domain=cookie.get("domain") or "")
+                domain = cookie.get("domain") or fallback_domain
+                if domain:
+                    self._client.cookies.set(name, value, domain=domain)
+                else:
+                    self._client.cookies.set(name, value)
 
     def get_cached(self, cache_key: str, playlist: bool = False) -> Any | None:
         table = "playlist_cache" if playlist else "title_cache"

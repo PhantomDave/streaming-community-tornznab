@@ -11,7 +11,7 @@ from app.models import Episode, Release, Title, Variant, now_utc
 
 
 def _parse_feed(xml_payload: str) -> ET.Element:
-    return ET.fromstring(xml_payload.split("\n", 1)[1])
+    return ET.fromstring(xml_payload)
 
 
 def _sample_release(infohash: str = "hash1") -> Release:
@@ -140,4 +140,3 @@ def test_torrent_download_returns_404_for_unknown_release(tmp_path) -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
-

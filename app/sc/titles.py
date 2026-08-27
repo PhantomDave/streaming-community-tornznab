@@ -10,7 +10,7 @@ from app.sc.client import StreamingCommunityClient
 async def get_title_details(client: StreamingCommunityClient, sc_id: int, slug: str) -> dict:
     cache_key = f"title:{sc_id}:{slug}"
     cached = client.get_cached(cache_key)
-    if cached:
+    if cached is not None:
         return cached
     # Use locale-prefixed title endpoint (e.g., /it/titles/3-breaking-bad)
     title_path = f"/{settings.locale}/titles/{sc_id}-{slug}"
