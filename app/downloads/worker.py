@@ -13,7 +13,13 @@ from app.models import Job, Release
 PROGRESS_PATTERN = re.compile(r"\[download\]\s+(?P<progress>\d+(?:\.\d+)?)%")
 
 
-async def run_download_job(settings: Settings, db: Database, job: Job, release: Release) -> None:
+async def run_download_job(
+    settings: Settings,
+    db: Database,
+    job: Job,
+    release: Release,
+    process_registry: dict[str, asyncio.subprocess.Process] | None = None,
+) -> None:
     output_path = build_output_path(settings, job.category, release.release_name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -28,20 +34,34 @@ async def run_download_job(settings: Settings, db: Database, job: Job, release: 
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
+    if process_registry is not None:
+        process_registry[job.id] = process
 
-    assert process.stdout is not None
-    async for raw_line in process.stdout:
-        line = raw_line.decode("utf-8", errors="ignore").strip()
-        progress = _parse_progress(line)
-        if progress is not None:
-            db.update_job_state(
-                job.id,
-                progress=progress / 100.0,
-                bytes_done=int(release.size_estimate * (progress / 100.0)),
-                bytes_total=release.size_estimate,
-            )
+    try:
+        assert process.stdout is not None
+        async for raw_line in process.stdout:
+            line = raw_line.decode("utf-8", errors="ignore").strip()
+            progress = _parse_progress(line)
+            if progress is not None:
+                db.update_job_state(
+                    job.id,
+                    progress=progress / 100.0,
+                    bytes_done=int(release.size_estimate * (progress / 100.0)),
+                    bytes_total=release.size_estimate,
+                )
 
-    code = await process.wait()
+        code = await process.wait()
+    finally:
+        if process_registry is not None:
+            process_registry.pop(job.id, None)
+
+    # A pause/delete request may have terminated the process on purpose; in that
+    # case the job's state (or absence, if deleted) already reflects the intent
+    # and must not be clobbered with a completed/error outcome.
+    current = db.get_job(job.id)
+    if current is None or current.state == "paused":
+        return
+
     if code != 0:
         db.update_job_state(job.id, state="error", error=f"yt-dlp exited with code {code}")
         return

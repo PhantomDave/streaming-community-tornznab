@@ -19,8 +19,8 @@ class FakeDownloadManager:
     async def resume_hashes(self, hashes: list[str]) -> None:
         self.calls.append(("resume", ",".join(hashes), ""))
 
-    async def delete_hashes(self, hashes: list[str]) -> None:
-        self.calls.append(("delete", ",".join(hashes), ""))
+    async def delete_hashes(self, hashes: list[str], *, delete_files: bool = False) -> None:
+        self.calls.append(("delete", ",".join(hashes), "true" if delete_files else ""))
 
 
 def test_qbit_add_pause_resume_delete_workflow() -> None:
@@ -48,6 +48,19 @@ def test_qbit_add_pause_resume_delete_workflow() -> None:
         ("resume", "abc123", ""),
         ("delete", "abc123", ""),
     ]
+
+
+def test_qbit_delete_forwards_delete_files_flag() -> None:
+    fake_manager = FakeDownloadManager()
+    app.dependency_overrides[get_download_manager] = lambda: fake_manager
+    try:
+        with TestClient(app) as client:
+            delete_response = client.post("/api/v2/torrents/delete", data={"hashes": "abc123", "deleteFiles": "true"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert delete_response.status_code == 200
+    assert fake_manager.calls == [("delete", "abc123", "true")]
 
 
 def test_qbit_categories_endpoint_roundtrip() -> None:
