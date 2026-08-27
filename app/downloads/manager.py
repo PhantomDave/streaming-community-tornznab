@@ -85,8 +85,9 @@ class DownloadManager:
             job_id = await self._queue.get()
             try:
                 await self._run_job(job_id)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Unhandled error while running job id=%s", job_id)
+                self._db.update_job_state(job_id, state="error", error=str(exc))
             finally:
                 self._queue.task_done()
 

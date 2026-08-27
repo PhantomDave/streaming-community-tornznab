@@ -65,7 +65,7 @@ async def run_download_job(settings: Settings, db: Database, job: Job, release: 
             duration_seconds = _parse_ffmpeg_duration(line)
             if duration_seconds is not None:
                 logger.debug("Job id=%s: ffmpeg input duration is %.1fs", job.id, duration_seconds)
-        if progress is None and duration_seconds:
+        if progress is None and duration_seconds is not None:
             progress = _parse_ffmpeg_progress(line, duration_seconds)
 
         if progress is not None:

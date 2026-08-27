@@ -74,6 +74,26 @@ resta invece il path *interno al container* (default `/data/downloads`) usato
 dall'app per costruire i percorsi dei file: va cambiato solo se sposti anche il
 mount point nel `docker-compose.yml`.
 
+**⚠️ Attenzione se stai aggiornando da una versione precedente**: prima di
+questa modifica `docker-compose.example.yml` montava un unico volume con nome
+`sctorznab-data:/data`. Il compose aggiornato usa due volumi nuovi e distinti
+(`sctorznab-db` e `sctorznab-downloads`): Docker/Podman li crea vuoti, il
+vecchio `sctorznab-data` non viene toccato né rimosso, ma l'app non lo vede
+più — DB e download già scaricati sembrerebbero spariti. Prima di eseguire
+`docker compose up -d` con il nuovo file, copia i dati dal volume esistente:
+
+```bash
+docker run --rm \
+  -v sctorznab-data:/old \
+  -v sctorznab-db:/new-db \
+  -v sctorznab-downloads:/new-downloads \
+  alpine sh -c "cp -a /old/db/. /new-db/ && cp -a /old/downloads/. /new-downloads/"
+```
+
+(sostituisci `docker` con `podman` se usi Podman). Chi usa il `docker-compose.yml`
+per build locale con bind mount (`./data/...`) non è interessato: i percorsi
+su disco restano invariati.
+
 ### Avvio locale
 
 ```bash
