@@ -1,0 +1,83 @@
+name: claude-review
+
+# Automatic review of non-draft PRs using the Claude GitHub App/action.
+# Claude reviews on every push, checks whether earlier feedback was addressed,
+# and if the PR is clean it approves it and turns on GitHub's native
+# auto-merge (which then merges once required checks pass).
+#
+# Requires (already set up on this repo):
+#   - Claude GitHub App installed, with CLAUDE_CODE_OAUTH_TOKEN repo secret
+#   - Settings > Actions > General > "Allow GitHub Actions to create and
+#     approve pull requests" enabled
+#   - Branch protection on main requiring an approving review, WITH "Dismiss
+#     stale pull request approvals when new commits are pushed" also on, and
+#     the tests.yml jobs marked as required status checks -- without this,
+#     Claude's approval survives later pushes it never reviewed, and
+#     `gh pr merge --auto` below has nothing to wait on
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  review:
+    # Skip drafts, and only run for trusted authors: this is a public repo,
+    # so an outside contributor's PR must not be able to talk Claude into an
+    # auto-approved, auto-merged change. Add more logins here as needed.
+    if: >
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login == 'PhantomDave'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Claude review
+        id: review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request for correctness bugs, security issues,
+            missing test coverage, and violations of this repo's conventions
+            (see CLAUDE.md if present). Read the existing PR conversation
+            first so you know which points you (or a previous review round)
+            already raised.
+
+            - If this is the first review round, or there are unresolved
+              blocking issues (new or previously raised), post them as inline
+              comments plus a short top-level summary, and do not approve.
+            - If every blocking issue from earlier rounds has been addressed
+              by the latest commits and the new code introduces no new
+              blocking issues, it's ready to approve. Minor style nits alone
+              must not block approval.
+
+            Return a JSON verdict.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --json-schema '{"type":"object","properties":{"approve":{"type":"boolean"},"reason":{"type":"string"}},"required":["approve","reason"]}'
+
+      - name: Approve and enable auto-merge
+        if: >
+          steps.review.outputs.structured_output != '' &&
+          fromJSON(steps.review.outputs.structured_output).approve == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REASON: ${{ fromJSON(steps.review.outputs.structured_output).reason }}
+        run: |
+          gh pr review "$PR_NUMBER" --approve --body "$REASON"
+          gh pr merge "$PR_NUMBER" --auto --squash
