@@ -9,10 +9,15 @@ _ETA_UNKNOWN = 8640000  # qBittorrent's own sentinel for "infinite/unknown" ETA
 def to_qbit_info(job: Job, release: Release | None, speed_bps: float = 0.0) -> dict:
     size = max(job.bytes_total, release.size_estimate if release else 0)
     amount_left = max(size - job.bytes_done, 0)
+    # A tracker's samples only get evicted on the next record() call, which
+    # stops firing the moment a job leaves the downloading loop (paused,
+    # errored, completed) — so a stale nonzero speed can otherwise linger
+    # for a torrent that isn't actually transferring anything anymore.
+    active_speed = speed_bps if job.state == "downloading" else 0.0
     if job.progress >= 1.0:
         eta = 0
-    elif speed_bps > 0:
-        eta = int(amount_left / speed_bps)
+    elif active_speed > 0:
+        eta = int(amount_left / active_speed)
     else:
         eta = _ETA_UNKNOWN
     return {
@@ -24,7 +29,7 @@ def to_qbit_info(job: Job, release: Release | None, speed_bps: float = 0.0) -> d
         "save_path": job.save_path,
         "content_path": job.content_path,
         "category": job.category,
-        "dlspeed": int(speed_bps),
+        "dlspeed": int(active_speed),
         "eta": eta,
         "amount_left": amount_left,
     }

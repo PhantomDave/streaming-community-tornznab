@@ -41,3 +41,20 @@ def test_eta_is_zero_once_job_completed_regardless_of_speed() -> None:
     job = _make_job(progress=1.0, bytes_done=1000, bytes_total=1000)
     info = to_qbit_info(job, release=None, speed_bps=0.0)
     assert info["eta"] == 0
+
+
+def test_dlspeed_is_zeroed_for_completed_job_with_stale_tracker_speed() -> None:
+    # A tracker's samples only get evicted on the next record() call, which
+    # stops firing once a job leaves the downloading loop, so a stale
+    # nonzero speed could otherwise linger past completion.
+    job = _make_job(state="completed", progress=1.0, bytes_done=1000, bytes_total=1000)
+    info = to_qbit_info(job, release=None, speed_bps=500_000.0)
+    assert info["dlspeed"] == 0
+    assert info["eta"] == 0
+
+
+def test_dlspeed_is_zeroed_for_paused_job_with_stale_tracker_speed() -> None:
+    job = _make_job(state="paused", progress=0.5, bytes_done=500, bytes_total=1000)
+    info = to_qbit_info(job, release=None, speed_bps=500_000.0)
+    assert info["dlspeed"] == 0
+    assert info["eta"] == 8640000

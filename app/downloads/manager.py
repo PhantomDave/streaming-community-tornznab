@@ -189,6 +189,7 @@ class DownloadManager:
                 # worker's post-termination state check sees "paused" and does
                 # not overwrite it with a completed/error outcome.
                 self._db.update_job_state(job.id, state="paused")
+                self._speed.reset(job.id)
                 self._terminate_process(job.id)
 
     async def resume_hashes(self, hashes: list[str]) -> None:
