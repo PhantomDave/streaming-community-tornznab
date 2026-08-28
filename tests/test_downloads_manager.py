@@ -147,6 +147,52 @@ def test_delete_hashes_without_delete_files_keeps_download_directory(tmp_path) -
     assert db.get_job(job.id) is None
 
 
+def test_stalled_process_with_repeating_non_advancing_output_is_killed(tmp_path, monkeypatch) -> None:
+    # Regression test: a process that keeps emitting output (e.g. ffmpeg
+    # repainting the same non-advancing "time=" line) must still be detected
+    # as stalled. The old "no bytes for X seconds" detector reset its clock on
+    # any byte read, so it would never fire here even though the download is
+    # frozen — only a genuine increase in parsed progress may reset the clock.
+    script = tmp_path / "repeat_progress.py"
+    script.write_text(
+        "import sys, time\n"
+        "while True:\n"
+        "    sys.stdout.write('[download]  45.0% of 100MiB\\n')\n"
+        "    sys.stdout.flush()\n"
+        "    time.sleep(0.02)\n"
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "build_ytdlp_command",
+        lambda settings, release, output_path: ["python3", str(script)],
+    )
+
+    settings = Settings(
+        download_path=str(tmp_path / "downloads"),
+        db_path=str(tmp_path / "db" / "sctorznab.db"),
+        max_retries=0,
+        download_stall_timeout=0.3,
+        download_progress_poll_interval=0.05,
+    )
+    db = Database(settings.db_path)
+    manager = DownloadManager(settings, db)
+    infohash = "stall002"
+    db.upsert_release(_make_release(infohash, "Frozen.Release"))
+
+    async def run() -> str:
+        job = await manager.create_or_enqueue(infohash=infohash, category="radarr")
+        await asyncio.wait_for(manager._run_job(job.id), timeout=5)
+        return job.id
+
+    job_id = asyncio.run(run())
+
+    final = db.get_job(job_id)
+    assert final is not None
+    assert final.state == "error"
+    assert final.error_kind == "transient"
+    assert "stalled" in (final.error or "").lower()
+
+
 def test_stalled_process_with_no_output_is_killed_and_marked_error(tmp_path, monkeypatch) -> None:
     # A yt-dlp/ffmpeg process that hangs mid-download (network stall, dead
     # peer, etc.) without exiting or printing anything must not leave the
@@ -176,6 +222,58 @@ def test_stalled_process_with_no_output_is_killed_and_marked_error(tmp_path, mon
     assert final is not None
     assert final.state == "error"
     assert "stalled" in (final.error or "").lower()
+
+
+def test_watchdog_requeues_transient_error_job_after_backoff_elapses(tmp_path) -> None:
+    manager, db = _make_manager(tmp_path)
+    infohash = "transient001"
+    release = _make_release(infohash, "Transient.Release")
+    db.upsert_release(release)
+    job = db.create_job(
+        "job-transient",
+        infohash,
+        "radarr",
+        str(tmp_path / "downloads" / "radarr"),
+        str(tmp_path / "downloads" / "radarr" / release.release_name / f"{release.release_name}.mkv"),
+    )
+    db.record_job_failure(job.id, error="Download stalled: no progress for 180s", error_kind="transient")
+    # Backdate updated_at so the (small, test-configured) backoff has already
+    # elapsed without needing to actually sleep in the test.
+    with db._lock, db._connect() as conn:
+        conn.execute("UPDATE jobs SET updated_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (job.id,))
+
+    asyncio.run(manager._retry_stalled_error_jobs())
+
+    refreshed = db.get_job(job.id)
+    assert refreshed is not None
+    assert refreshed.state == "queued"
+    assert refreshed.error_kind == ""
+    assert manager._queue.get_nowait() == job.id
+
+
+def test_watchdog_ignores_permanent_error_jobs(tmp_path) -> None:
+    manager, db = _make_manager(tmp_path)
+    infohash = "permanent001"
+    release = _make_release(infohash, "Permanent.Release")
+    db.upsert_release(release)
+    job = db.create_job(
+        "job-permanent",
+        infohash,
+        "radarr",
+        str(tmp_path / "downloads" / "radarr"),
+        str(tmp_path / "downloads" / "radarr" / release.release_name / f"{release.release_name}.mkv"),
+    )
+    db.record_job_failure(job.id, error="Missing source URL", error_kind="permanent")
+    with db._lock, db._connect() as conn:
+        conn.execute("UPDATE jobs SET updated_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (job.id,))
+
+    asyncio.run(manager._retry_stalled_error_jobs())
+
+    refreshed = db.get_job(job.id)
+    assert refreshed is not None
+    assert refreshed.state == "error"
+    assert refreshed.error_kind == "permanent"
+    assert manager._queue.empty()
 
 
 def test_start_recovers_jobs_stuck_from_previous_run(tmp_path, monkeypatch) -> None:

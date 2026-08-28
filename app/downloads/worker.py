@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
 import re
+import time
 
 from app.config import Settings
 from app.db import Database
@@ -24,7 +26,31 @@ DURATION_PATTERN = re.compile(r"Duration:\s*(?P<h>\d+):(?P<m>\d+):(?P<s>\d+(?:\.
 FFMPEG_TIME_PATTERN = re.compile(r"time=(?P<h>\d+):(?P<m>\d+):(?P<s>\d+(?:\.\d+)?)")
 _LOG_PROGRESS_STEP = 10.0
 
+# Failures whose message indicates yt-dlp will never succeed on retry, no
+# matter how many times we re-run it (unlike a stall or a transient network
+# hiccup, which are worth retrying indefinitely).
+_PERMANENT_FAILURE_SIGNALS = (
+    "unsupported url",
+    "requested format is not available",
+    "http error 404",
+    "http error 403",
+    "this video is unavailable",
+    "unable to extract",
+    "drm protected",
+)
+
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _classify_ytdlp_failure(output_lines: list[str]) -> str:
+    tail = " ".join(output_lines[-15:]).lower()
+    if any(signal in tail for signal in _PERMANENT_FAILURE_SIGNALS):
+        return "permanent"
+    return "transient"
 
 
 async def run_download_job(
@@ -33,18 +59,24 @@ async def run_download_job(
     job: Job,
     release: Release,
     process_registry: dict[str, asyncio.subprocess.Process] | None = None,
+    *,
+    attempt: int = 1,
+    max_attempts: int = 1,
 ) -> None:
     output_path = build_output_path(settings, job.category, release.release_name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not release.source_url:
         logger.error("Job id=%s: release %s has no source_url, cannot download", job.id, release.release_name)
-        db.update_job_state(job.id, state="error", error="Missing source URL")
+        db.record_job_failure(job.id, error="Missing source URL", error_kind="permanent")
         return
 
     command = build_ytdlp_command(settings, release, output_path)
-    logger.info("Job id=%s: starting yt-dlp: %s", job.id, command_as_string(command))
-    db.update_job_state(job.id, state="downloading", progress=0.0, bytes_done=0, bytes_total=max(release.size_estimate, 0), error="")
+    logger.info(
+        "Job id=%s infohash=%s: starting yt-dlp (attempt %d/%d): %s",
+        job.id, job.infohash, attempt, max_attempts, command_as_string(command),
+    )
+    db.update_job_state(job.id, state="downloading", progress=0.0, bytes_done=0, bytes_total=max(release.size_estimate, 0), error="", error_kind="")
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -53,7 +85,7 @@ async def run_download_job(
         )
     except FileNotFoundError as exc:
         logger.error("Job id=%s: failed to launch yt-dlp (%s): %s", job.id, settings.ytdlp_path, exc)
-        db.update_job_state(job.id, state="error", error=f"yt-dlp not found: {exc}")
+        db.record_job_failure(job.id, error=f"yt-dlp not found: {exc}", error_kind="permanent")
         return
 
     if process_registry is not None:
@@ -63,60 +95,84 @@ async def run_download_job(
     try:
         assert process.stdout is not None
         last_logged_progress = -1.0
+        last_progress_value = -1.0
+        last_progress_time = time.monotonic()
         duration_seconds: float | None = None
         output_lines: list[str] = []
         buffer = b""
         lines_seen = 0
+        poll_interval = min(settings.download_progress_poll_interval, settings.download_stall_timeout)
         while True:
             try:
-                chunk = await asyncio.wait_for(
-                    process.stdout.read(4096), timeout=settings.download_stall_timeout
-                )
+                chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=poll_interval)
             except asyncio.TimeoutError:
+                chunk = b""
+            else:
+                if not chunk:
+                    break
+
+            if chunk:
+                raw_lines, buffer = _extract_lines(buffer + chunk)
+                for raw_line in raw_lines:
+                    lines_seen += 1
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line:
+                        continue
+                    output_lines.append(line)
+                    if len(output_lines) > 50:
+                        output_lines.pop(0)
+
+                    progress = _parse_progress(line)
+                    if progress is None and duration_seconds is None:
+                        duration_seconds = _parse_ffmpeg_duration(line)
+                        if duration_seconds is not None:
+                            logger.debug("Job id=%s: ffmpeg input duration is %.1fs", job.id, duration_seconds)
+                    if progress is None and duration_seconds is not None:
+                        progress = _parse_ffmpeg_progress(line, duration_seconds)
+
+                    if progress is not None:
+                        db.update_job_state(
+                            job.id,
+                            progress=progress / 100.0,
+                            bytes_done=int(release.size_estimate * (progress / 100.0)),
+                            bytes_total=release.size_estimate,
+                        )
+                        if progress - last_logged_progress >= _LOG_PROGRESS_STEP or progress >= 100.0:
+                            logger.info("Job id=%s: progress %.1f%%", job.id, progress)
+                            last_logged_progress = progress
+                        if progress > last_progress_value or last_progress_value < 0:
+                            # Only a genuine increase counts as real forward
+                            # progress; a repeated/non-advancing value (e.g. an
+                            # ffmpeg time= line stuck on the same timestamp)
+                            # must NOT reset the stall clock, or a frozen
+                            # process that keeps emitting output would never
+                            # be detected as stalled.
+                            last_progress_value = progress
+                            last_progress_time = time.monotonic()
+                            db.update_job_state(job.id, last_progress_at=_now_iso())
+                    elif line:
+                        level = logging.INFO if settings.verbose_downloads else logging.DEBUG
+                        logger.log(level, "Job id=%s: yt-dlp: %s", job.id, line)
+                    if last_progress_value < 0:
+                        # No progress signal has ever been parsed yet in this
+                        # run (still in yt-dlp's startup/resolving phase, e.g.
+                        # before ffmpeg has even printed Duration:) — tolerate
+                        # any byte activity as a sign of life until the first
+                        # real progress figure arrives.
+                        last_progress_time = time.monotonic()
+
+            if time.monotonic() - last_progress_time >= settings.download_stall_timeout:
                 logger.error(
-                    "Job id=%s: no output for %.0fs (last progress %.1f%%, %d lines seen), "
-                    "treating as stalled and killing process",
-                    job.id,
-                    settings.download_stall_timeout,
-                    max(last_logged_progress, 0.0),
-                    lines_seen,
+                    "Job id=%s infohash=%s release=%s: STALL DETECTED - no progress advance for "
+                    "%.0fs (last known %.1f%%, %d lines seen, attempt %d/%d), killing process",
+                    job.id, job.infohash, release.release_name,
+                    time.monotonic() - last_progress_time,
+                    max(last_progress_value, 0.0),
+                    lines_seen, attempt, max_attempts,
                 )
                 stalled = True
                 process.kill()
                 break
-            if not chunk:
-                break
-
-            raw_lines, buffer = _extract_lines(buffer + chunk)
-            for raw_line in raw_lines:
-                lines_seen += 1
-                line = raw_line.decode("utf-8", errors="ignore").strip()
-                if not line:
-                    continue
-                output_lines.append(line)
-                if len(output_lines) > 50:
-                    output_lines.pop(0)
-
-                progress = _parse_progress(line)
-                if progress is None and duration_seconds is None:
-                    duration_seconds = _parse_ffmpeg_duration(line)
-                    if duration_seconds is not None:
-                        logger.debug("Job id=%s: ffmpeg input duration is %.1fs", job.id, duration_seconds)
-                if progress is None and duration_seconds is not None:
-                    progress = _parse_ffmpeg_progress(line, duration_seconds)
-
-                if progress is not None:
-                    db.update_job_state(
-                        job.id,
-                        progress=progress / 100.0,
-                        bytes_done=int(release.size_estimate * (progress / 100.0)),
-                        bytes_total=release.size_estimate,
-                    )
-                    if progress - last_logged_progress >= _LOG_PROGRESS_STEP or progress >= 100.0:
-                        logger.info("Job id=%s: progress %.1f%%", job.id, progress)
-                        last_logged_progress = progress
-                elif line:
-                    logger.debug("Job id=%s: yt-dlp: %s", job.id, line)
 
         code = await process.wait()
     finally:
@@ -131,18 +187,19 @@ async def run_download_job(
         return
 
     if stalled:
-        logger.error("Job id=%s: killed after stalling with no output", job.id)
-        db.update_job_state(
+        logger.error("Job id=%s: killed after stalling with no progress advance", job.id)
+        db.record_job_failure(
             job.id,
-            state="error",
-            error=f"Download stalled: no output for {settings.download_stall_timeout:.0f}s",
+            error=f"Download stalled: no progress for {settings.download_stall_timeout:.0f}s",
+            error_kind="transient",
         )
         return
 
     if code != 0:
         tail = " | ".join(output_lines[-10:])
-        logger.error("Job id=%s: yt-dlp exited with code %d. Last output: %s", job.id, code, tail)
-        db.update_job_state(job.id, state="error", error=f"yt-dlp exited with code {code}")
+        kind = _classify_ytdlp_failure(output_lines)
+        logger.error("Job id=%s: yt-dlp exited with code %d (error_kind=%s). Last output: %s", job.id, code, kind, tail)
+        db.record_job_failure(job.id, error=f"yt-dlp exited with code {code}", error_kind=kind)
         return
 
     final_path = _ensure_mkv(output_path)

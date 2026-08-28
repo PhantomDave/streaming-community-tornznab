@@ -91,7 +91,10 @@ class Database:
                     content_path TEXT NOT NULL,
                     error TEXT,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    error_kind TEXT,
+                    last_progress_at TEXT
                 );
                 CREATE TABLE IF NOT EXISTS categories (
                     name TEXT PRIMARY KEY
@@ -108,6 +111,21 @@ class Database:
                 );
                 """
             )
+            self._migrate_jobs_table(conn)
+
+    def _migrate_jobs_table(self, conn: sqlite3.Connection) -> None:
+        # Additive migration for jobs DBs created before retry_count/error_kind/
+        # last_progress_at existed — there is no migration framework, so patch
+        # existing sqlite files in place. No-op on fresh DBs (CREATE TABLE above
+        # already includes these columns).
+        existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        for col_name, col_def in (
+            ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("error_kind", "TEXT"),
+            ("last_progress_at", "TEXT"),
+        ):
+            if col_name not in existing_cols:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_def}")
 
     def upsert_release(self, release: Release) -> None:
         with self._lock, self._connect() as conn:
@@ -210,6 +228,9 @@ class Database:
         bytes_total: int | None = None,
         error: str | None = None,
         content_path: str | None = None,
+        error_kind: str | None = None,
+        last_progress_at: str | None = None,
+        retry_count: int | None = None,
     ) -> None:
         assignments: list[str] = []
         params: list[Any] = []
@@ -231,11 +252,32 @@ class Database:
         if content_path is not None:
             assignments.append("content_path = ?")
             params.append(content_path)
+        if error_kind is not None:
+            assignments.append("error_kind = ?")
+            params.append(error_kind)
+        if last_progress_at is not None:
+            assignments.append("last_progress_at = ?")
+            params.append(last_progress_at)
+        if retry_count is not None:
+            assignments.append("retry_count = ?")
+            params.append(retry_count)
         assignments.append("updated_at = ?")
         params.append(_utc_now())
         params.append(job_id)
         with self._lock, self._connect() as conn:
             conn.execute(f"UPDATE jobs SET {', '.join(assignments)} WHERE id = ?", params)
+
+    def record_job_failure(self, job_id: str, *, error: str, error_kind: str) -> None:
+        # Marks the job as failed and classifies why in one atomic statement,
+        # incrementing the persisted retry counter so backoff (computed by the
+        # watchdog) grows across restarts too, not just within one process
+        # lifetime like the old in-memory attempt counter did.
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET state = 'error', error = ?, error_kind = ?, "
+                "retry_count = retry_count + 1, updated_at = ? WHERE id = ?",
+                (error, error_kind, _utc_now(), job_id),
+            )
 
     def delete_job(self, hashes: list[str]) -> None:
         if not hashes:

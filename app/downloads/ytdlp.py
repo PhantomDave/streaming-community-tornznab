@@ -25,7 +25,15 @@ def build_ytdlp_command(settings: Settings, release: Release, output_path: Path)
         "--hls-use-mpegts",
         "-f",
         "best",
+        "--concurrent-fragments",
+        str(settings.download_concurrent_fragments),
     ]
+    if settings.verbose_downloads:
+        # Surfaces yt-dlp's own diagnostic output (invisible by default) plus
+        # ffmpeg's internal log messages for AES-128 streams delegated to it —
+        # ffmpeg's periodic progress stats are independent of -loglevel and
+        # keep working unchanged.
+        command += ["-v", "--downloader-args", "ffmpeg:-loglevel verbose"]
     # --ffmpeg-location must be an existing file/directory path; a bare command
     # name like the "ffmpeg" default isn't resolved against PATH by yt-dlp
     # itself, so only pass it once resolved to an absolute path, and otherwise
