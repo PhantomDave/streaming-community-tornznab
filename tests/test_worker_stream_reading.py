@@ -64,6 +64,76 @@ def test_carriage_return_only_progress_is_observed_before_process_exits(tmp_path
     asyncio.run(_run_carriage_return_only_progress_test(tmp_path))
 
 
+def _write_fake_ytdlp_two_tracks(tmp_path: Path) -> Path:
+    # Mimics a release with separate video+audio HLS tracks (bv+ba): the
+    # first "file" reaches 100%, then a second "[download]" progress
+    # sequence starts over from 0% for the audio track. Percentage legitimately
+    # drops between the two files even though real progress is being made.
+    script = tmp_path / "fake_ytdlp.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import sys
+            import time
+
+            for pct in (50, 100):
+                sys.stdout.write(f"[download] {pct}.0% of 10.00MiB\\n")
+                sys.stdout.flush()
+                time.sleep(0.1)
+            for pct in (10, 30, 60, 100):
+                sys.stdout.write(f"[download] {pct}.0% of 2.00MiB\\n")
+                sys.stdout.flush()
+                time.sleep(0.1)
+            sys.exit(0)
+            """
+        ).strip()
+        + "\n"
+    )
+    launcher = tmp_path / "fake_ytdlp"
+    launcher.write_text(f"#!/usr/bin/env python3\n{script.read_text()}")
+    launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return launcher
+
+
+def test_progress_drop_between_video_and_audio_tracks_is_not_a_stall(tmp_path) -> None:
+    asyncio.run(_run_two_track_progress_drop_test(tmp_path))
+
+
+async def _run_two_track_progress_drop_test(tmp_path) -> None:
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    settings = Settings(
+        download_path=str(tmp_path / "downloads"),
+        db_path=str(db_dir / "sctorznab.db"),
+        ytdlp_path=str(_write_fake_ytdlp_two_tracks(tmp_path)),
+        # Shorter than the total runtime of the fake process, but long
+        # enough that only a genuine failure to reset the stall clock on
+        # the video->audio progress drop would trigger a false kill.
+        download_stall_timeout=0.4,
+        download_progress_poll_interval=0.05,
+    )
+    db = Database(settings.db_path)
+    release = _release()
+    db.upsert_release(release)
+    job = db.create_job(
+        "job-1",
+        release.infohash,
+        "radarr",
+        str(tmp_path / "downloads" / "radarr"),
+        str(tmp_path / "downloads" / "radarr" / release.release_name / f"{release.release_name}.mkv"),
+    )
+
+    await run_download_job(settings, db, job, release)
+
+    final = db.get_job(job.id)
+    assert final is not None
+    # Regression guard: previously the stall clock only reset on a strict
+    # percentage *increase*, so the drop from 100% (video) to 10%/30%/60%
+    # (audio) never counted as progress and the job was killed as "stalled"
+    # even though it was actively downloading.
+    assert final.state == "completed", final.error
+
+
 async def _run_carriage_return_only_progress_test(tmp_path) -> None:
     db_dir = tmp_path / "db"
     db_dir.mkdir()
