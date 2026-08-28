@@ -33,6 +33,7 @@ class Variant:
     url: str
     codecs: str = ""
     audio: str = "ITA"
+    audio_url: str = ""
 
 
 @dataclass(slots=True)
@@ -51,6 +52,8 @@ class Release:
     release_name: str
     source_url: str
     created_at: str
+    codecs: str = ""
+    audio_url: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

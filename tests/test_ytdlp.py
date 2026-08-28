@@ -24,7 +24,7 @@ def _release(**overrides) -> Release:
     return Release(**defaults)
 
 
-def test_build_ytdlp_command_uses_best_format_not_height_filter(tmp_path) -> None:
+def test_build_ytdlp_command_uses_bv_ba_format_not_height_filter(tmp_path) -> None:
     # release.source_url already points at a single, resolution-specific HLS
     # rendition whose media playlist carries no per-format height metadata, so
     # a height-based selector like "bv*[height<=1080]" always fails with
@@ -33,11 +33,12 @@ def test_build_ytdlp_command_uses_best_format_not_height_filter(tmp_path) -> Non
     release = _release()
     output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
 
-    command = build_ytdlp_command(settings, release, output_path)
+    command, wrapper_path = build_ytdlp_command(settings, release, output_path)
 
+    assert wrapper_path is None
     assert "-f" in command
     format_index = command.index("-f")
-    assert command[format_index + 1] == "best"
+    assert command[format_index + 1] == "bv+ba/b"
     assert not any("height" in token for token in command)
 
 
@@ -51,7 +52,7 @@ def test_build_ytdlp_command_omits_unresolvable_ffmpeg_location(tmp_path) -> Non
     release = _release()
     output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
 
-    command = build_ytdlp_command(settings, release, output_path)
+    command, _ = build_ytdlp_command(settings, release, output_path)
 
     assert "--ffmpeg-location" not in command
 
@@ -61,7 +62,7 @@ def test_build_ytdlp_command_includes_verbose_flags_by_default(tmp_path) -> None
     release = _release()
     output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
 
-    command = build_ytdlp_command(settings, release, output_path)
+    command, _ = build_ytdlp_command(settings, release, output_path)
 
     assert "-v" in command
     assert "--downloader-args" in command
@@ -74,7 +75,7 @@ def test_build_ytdlp_command_omits_verbose_flags_when_disabled(tmp_path) -> None
     release = _release()
     output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
 
-    command = build_ytdlp_command(settings, release, output_path)
+    command, _ = build_ytdlp_command(settings, release, output_path)
 
     assert "-v" not in command
     assert "--downloader-args" not in command
@@ -85,7 +86,7 @@ def test_build_ytdlp_command_includes_concurrent_fragments(tmp_path) -> None:
     release = _release()
     output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
 
-    command = build_ytdlp_command(settings, release, output_path)
+    command, _ = build_ytdlp_command(settings, release, output_path)
 
     assert "--concurrent-fragments" in command
     index = command.index("--concurrent-fragments")
@@ -100,8 +101,45 @@ def test_build_ytdlp_command_includes_resolvable_ffmpeg_location(tmp_path) -> No
     release = _release()
     output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
 
-    command = build_ytdlp_command(settings, release, output_path)
+    command, _ = build_ytdlp_command(settings, release, output_path)
 
     assert "--ffmpeg-location" in command
     location_index = command.index("--ffmpeg-location")
     assert command[location_index + 1] == str(ffmpeg_stub)
+
+
+def test_build_ytdlp_command_wraps_separate_audio_rendition(tmp_path) -> None:
+    # vixcloud commonly serves audio as its own HLS rendition rather than
+    # muxed into the video segments; source_url alone is picture-only, so
+    # yt-dlp needs a small local playlist tying it back to audio_url.
+    settings = Settings(FFMPEG_PATH="ffmpeg-does-not-exist-anywhere")
+    release = _release(audio_url="https://vixcloud.co/playlist/1?type=audio&rendition=ita")
+    output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
+
+    command, wrapper_path = build_ytdlp_command(settings, release, output_path)
+
+    try:
+        assert wrapper_path is not None
+        assert wrapper_path.exists()
+        assert "--enable-file-urls" in command
+        assert command[-1] == wrapper_path.as_uri()
+
+        wrapper_text = wrapper_path.read_text(encoding="utf-8")
+        assert "#EXT-X-MEDIA:TYPE=AUDIO" in wrapper_text
+        assert release.audio_url in wrapper_text
+        assert release.source_url in wrapper_text
+    finally:
+        if wrapper_path is not None:
+            wrapper_path.unlink(missing_ok=True)
+
+
+def test_build_ytdlp_command_skips_wrapper_when_audio_matches_source(tmp_path) -> None:
+    settings = Settings(FFMPEG_PATH="ffmpeg-does-not-exist-anywhere")
+    release = _release(audio_url="https://vixcloud.co/playlist/1?rendition=1080p")
+    output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
+
+    command, wrapper_path = build_ytdlp_command(settings, release, output_path)
+
+    assert wrapper_path is None
+    assert "--enable-file-urls" not in command
+    assert command[-1] == release.source_url

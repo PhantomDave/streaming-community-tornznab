@@ -49,7 +49,7 @@ async def _wait_until(predicate, timeout: float = 5.0) -> None:
 
 
 def test_pause_terminates_running_subprocess_and_preserves_paused_state(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(worker_module, "build_ytdlp_command", lambda settings, release, output_path: ["sleep", "30"])
+    monkeypatch.setattr(worker_module, "build_ytdlp_command", lambda settings, release, output_path: (["sleep", "30"], None))
 
     manager, db = _make_manager(tmp_path)
     infohash = "abc123"
@@ -80,7 +80,7 @@ def test_pause_terminates_running_subprocess_and_preserves_paused_state(tmp_path
 
 
 def test_delete_hashes_terminates_process_and_removes_db_row(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(worker_module, "build_ytdlp_command", lambda settings, release, output_path: ["sleep", "30"])
+    monkeypatch.setattr(worker_module, "build_ytdlp_command", lambda settings, release, output_path: (["sleep", "30"], None))
 
     manager, db = _make_manager(tmp_path)
     infohash = "def456"
@@ -164,7 +164,7 @@ def test_stalled_process_with_repeating_non_advancing_output_is_killed(tmp_path,
     monkeypatch.setattr(
         worker_module,
         "build_ytdlp_command",
-        lambda settings, release, output_path: ["python3", str(script)],
+        lambda settings, release, output_path: (["python3", str(script)], None),
     )
 
     settings = Settings(
@@ -198,7 +198,7 @@ def test_stalled_process_with_no_output_is_killed_and_marked_error(tmp_path, mon
     # peer, etc.) without exiting or printing anything must not leave the
     # job stuck in "downloading" forever — it should be killed and surfaced
     # as an error so the retry loop in DownloadManager._run_job can act on it.
-    monkeypatch.setattr(worker_module, "build_ytdlp_command", lambda settings, release, output_path: ["sleep", "30"])
+    monkeypatch.setattr(worker_module, "build_ytdlp_command", lambda settings, release, output_path: (["sleep", "30"], None))
 
     settings = Settings(
         download_path=str(tmp_path / "downloads"),
@@ -281,7 +281,7 @@ def test_start_recovers_jobs_stuck_from_previous_run(tmp_path, monkeypatch) -> N
     # in-memory queue and process registry both start empty, so without
     # recovery that job would sit stuck in its old state forever with no
     # process actually running. start() must re-queue it.
-    monkeypatch.setattr(worker_module, "build_ytdlp_command", lambda settings, release, output_path: ["true"])
+    monkeypatch.setattr(worker_module, "build_ytdlp_command", lambda settings, release, output_path: (["true"], None))
 
     manager, db = _make_manager(tmp_path)
     infohash = "stuck001"

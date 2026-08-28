@@ -77,7 +77,9 @@ class Database:
                     size_estimate INTEGER NOT NULL,
                     release_name TEXT NOT NULL,
                     source_url TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    codecs TEXT NOT NULL DEFAULT '',
+                    audio_url TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
@@ -112,6 +114,15 @@ class Database:
                 """
             )
             self._migrate_jobs_table(conn)
+            self._migrate_releases_table(conn)
+
+    def _migrate_releases_table(self, conn: sqlite3.Connection) -> None:
+        # Additive migration for release DBs created before codecs/audio_url
+        # existed — see _migrate_jobs_table for why this is done by hand.
+        existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(releases)").fetchall()}
+        for col_name in ("codecs", "audio_url"):
+            if col_name not in existing_cols:
+                conn.execute(f"ALTER TABLE releases ADD COLUMN {col_name} TEXT NOT NULL DEFAULT ''")
 
     def _migrate_jobs_table(self, conn: sqlite3.Connection) -> None:
         # Additive migration for jobs DBs created before retry_count/error_kind/
@@ -133,12 +144,15 @@ class Database:
                 """
                 INSERT INTO releases (
                     infohash, sc_id, sc_type, slug, title, year, season, episode,
-                    resolution, audio, size_estimate, release_name, source_url, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    resolution, audio, size_estimate, release_name, source_url, created_at,
+                    codecs, audio_url
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(infohash) DO UPDATE SET
                     source_url = excluded.source_url,
                     size_estimate = excluded.size_estimate,
-                    release_name = excluded.release_name
+                    release_name = excluded.release_name,
+                    codecs = excluded.codecs,
+                    audio_url = excluded.audio_url
                 """,
                 (
                     release.infohash,
@@ -155,6 +169,8 @@ class Database:
                     release.release_name,
                     release.source_url,
                     release.created_at,
+                    release.codecs,
+                    release.audio_url,
                 ),
             )
 
