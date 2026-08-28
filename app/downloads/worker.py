@@ -77,7 +77,7 @@ async def run_download_job(
         db.record_job_failure(job.id, error="Missing source URL", error_kind="permanent")
         return
 
-    command, wrapper_path = build_ytdlp_command(settings, release, output_path)
+    command = build_ytdlp_command(settings, release, output_path)
     logger.info(
         "Job id=%s infohash=%s: starting yt-dlp (attempt %d/%d): %s",
         job.id, job.infohash, attempt, max_attempts, command_as_string(command),
@@ -94,8 +94,6 @@ async def run_download_job(
     except FileNotFoundError as exc:
         logger.error("Job id=%s: failed to launch yt-dlp (%s): %s", job.id, settings.ytdlp_path, exc)
         db.record_job_failure(job.id, error=f"yt-dlp not found: {exc}", error_kind="permanent")
-        if wrapper_path is not None:
-            wrapper_path.unlink(missing_ok=True)
         return
 
     if process_registry is not None:
@@ -191,8 +189,6 @@ async def run_download_job(
     finally:
         if process_registry is not None:
             process_registry.pop(job.id, None)
-        if wrapper_path is not None:
-            wrapper_path.unlink(missing_ok=True)
 
     # A pause/delete request may have terminated the process on purpose; in that
     # case the job's state (or absence, if deleted) already reflects the intent
