@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -8,6 +9,8 @@ from threading import Lock
 from typing import Any
 
 from app.models import Job, Release
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> str:
@@ -27,11 +30,29 @@ class Database:
         parent = os.path.dirname(requested_path)
         if not parent:
             return requested_path
+        # os.access() on a directory that doesn't exist yet always returns
+        # False, which used to trip the "not writable" fallback below for
+        # every fresh setup (e.g. a bind-mounted volume Docker hasn't
+        # populated yet) even though the path is perfectly fine once
+        # created. Create it first so only a genuine permission problem
+        # (e.g. a volume mounted with the wrong owner) falls through.
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError:
+            pass
         if os.access(parent, os.W_OK):
             return requested_path
         fallback_dir = os.path.join("/tmp", "sctorznab")
         os.makedirs(fallback_dir, exist_ok=True)
-        return os.path.join(fallback_dir, os.path.basename(requested_path))
+        fallback_path = os.path.join(fallback_dir, os.path.basename(requested_path))
+        logger.warning(
+            "DB path parent %s is not writable; falling back to %s. This location "
+            "is NOT persisted across container restarts and job/download state "
+            "will be lost — fix the permissions on the mounted volume.",
+            parent,
+            fallback_path,
+        )
+        return fallback_path
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, check_same_thread=False)

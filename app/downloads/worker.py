@@ -64,28 +64,18 @@ async def run_download_job(
         last_logged_progress = -1.0
         duration_seconds: float | None = None
         output_lines: list[str] = []
-        while True:
-            try:
-                raw_line = await asyncio.wait_for(
-                    process.stdout.readline(), timeout=settings.download_stall_timeout
-                )
-            except asyncio.TimeoutError:
-                logger.error(
-                    "Job id=%s: no output for %.0fs, treating as stalled and killing process",
-                    job.id,
-                    settings.download_stall_timeout,
-                )
-                stalled = True
-                process.kill()
-                break
-            if not raw_line:
-                break
+        buffer = bytearray()
+        lines_seen = 0
 
+        def _handle_line(raw_line: bytes) -> None:
+            nonlocal duration_seconds, last_logged_progress, lines_seen
+            lines_seen += 1
             line = raw_line.decode("utf-8", errors="ignore").strip()
-            if line:
-                output_lines.append(line)
-                if len(output_lines) > 50:
-                    output_lines.pop(0)
+            if not line:
+                return
+            output_lines.append(line)
+            if len(output_lines) > 50:
+                output_lines.pop(0)
 
             progress = _parse_progress(line)
             if progress is None and duration_seconds is None:
@@ -105,8 +95,50 @@ async def run_download_job(
                 if progress - last_logged_progress >= _LOG_PROGRESS_STEP or progress >= 100.0:
                     logger.info("Job id=%s: progress %.1f%%", job.id, progress)
                     last_logged_progress = progress
-            elif line:
+            else:
                 logger.debug("Job id=%s: yt-dlp: %s", job.id, line)
+
+        # ffmpeg repaints its progress stats in place with '\r' instead of
+        # ending them with '\n'; readline() only ever splits on '\n', so those
+        # updates would sit unprocessed (invisible to both progress reporting
+        # and the stall timeout below) until an unrelated '\n' happened to
+        # show up, and could eventually overrun readline()'s internal buffer
+        # and raise. Read raw chunks instead and split on either '\r' or '\n'
+        # so each repaint is handled as soon as it arrives.
+        while True:
+            try:
+                chunk = await asyncio.wait_for(
+                    process.stdout.read(4096), timeout=settings.download_stall_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Job id=%s: no output for %.0fs (last progress %.1f%%, %d lines seen), "
+                    "treating as stalled and killing process",
+                    job.id,
+                    settings.download_stall_timeout,
+                    max(last_logged_progress, 0.0),
+                    lines_seen,
+                )
+                stalled = True
+                process.kill()
+                break
+
+            if not chunk:
+                if buffer:
+                    _handle_line(bytes(buffer))
+                    buffer.clear()
+                break
+
+            buffer.extend(chunk)
+            while True:
+                newline_at = buffer.find(b"\n")
+                cr_at = buffer.find(b"\r")
+                candidates = [i for i in (newline_at, cr_at) if i != -1]
+                if not candidates:
+                    break
+                split_at = min(candidates)
+                _handle_line(bytes(buffer[:split_at]))
+                del buffer[: split_at + 1]
 
         code = await process.wait()
     finally:
