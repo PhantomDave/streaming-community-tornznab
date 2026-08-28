@@ -1,3 +1,5 @@
+import sqlite3
+
 from app.db import Database
 from app.models import Release, now_utc
 
@@ -72,6 +74,48 @@ def test_release_upsert_updates_selected_fields(tmp_path) -> None:
     assert stored.size_estimate == 654321
     assert stored.source_url == "https://example.test/updated.m3u8"
     assert stored.title == "Dune"
+
+
+def test_opening_pre_migration_db_adds_new_job_columns_without_losing_rows(tmp_path) -> None:
+    # Simulates a jobs table created before retry_count/error_kind/
+    # last_progress_at existed (no migration framework — Database must patch
+    # existing sqlite files in place via ALTER TABLE, not just CREATE TABLE
+    # IF NOT EXISTS, which is a no-op once the table already exists).
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            id TEXT PRIMARY KEY,
+            infohash TEXT NOT NULL,
+            category TEXT NOT NULL,
+            state TEXT NOT NULL,
+            progress REAL NOT NULL,
+            bytes_done INTEGER NOT NULL,
+            bytes_total INTEGER NOT NULL,
+            save_path TEXT NOT NULL,
+            content_path TEXT NOT NULL,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO jobs VALUES ('job-legacy', 'hash-legacy', 'radarr', 'completed', 1.0, 100, 100, "
+        "'/downloads/radarr', '/downloads/radarr/file.mkv', NULL, '2024-01-01T00:00:00+00:00', "
+        "'2024-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(str(db_path))
+
+    job = db.get_job("job-legacy")
+    assert job is not None
+    assert job.retry_count == 0
+    assert job.error_kind is None
+    assert job.last_progress_at is None
 
 
 def test_categories_are_sorted_and_unique(tmp_path) -> None:

@@ -70,6 +70,9 @@ class Job:
     error: str | None
     created_at: str
     updated_at: str
+    retry_count: int = 0
+    error_kind: str | None = None
+    last_progress_at: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

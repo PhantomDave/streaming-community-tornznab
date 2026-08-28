@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import shutil
@@ -22,6 +23,7 @@ class DownloadManager:
         self._workers: list[asyncio.Task] = []
         self._running = False
         self._processes: dict[str, asyncio.subprocess.Process] = {}
+        self._watchdog_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         if self._running:
@@ -31,6 +33,7 @@ class DownloadManager:
         for _ in range(worker_count):
             self._workers.append(asyncio.create_task(self._worker_loop()))
         await self._recover_stuck_jobs()
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         logger.info("Download manager started with %d worker(s)", worker_count)
 
     async def _recover_stuck_jobs(self) -> None:
@@ -42,12 +45,57 @@ class DownloadManager:
         for job in self._db.list_jobs():
             if job.state in in_flight_states:
                 logger.warning(
-                    "Recovering job id=%s stuck in state=%s after restart, re-queuing",
+                    "Recovering job id=%s infohash=%s stuck in state=%s after restart, re-queuing",
                     job.id,
+                    job.infohash,
                     job.state,
                 )
-                self._db.update_job_state(job.id, state="queued", progress=0.0, error="")
+                self._db.update_job_state(job.id, state="queued", progress=0.0, error="", error_kind="")
                 await self._queue.put(job.id)
+
+    async def _watchdog_loop(self) -> None:
+        # Jobs that exhausted _run_job's fast retry loop are left in
+        # state="error" rather than retried forever in-place, because doing
+        # the retry sleep inside a worker task would occupy one of the fixed
+        # worker slots for the whole backoff window and starve other queued
+        # jobs. This single background loop re-queues them instead, with a
+        # backoff computed from their persisted retry_count so it survives
+        # restarts. It also runs its first scan immediately, before the first
+        # sleep, so a job already stuck in error="transient" from before a
+        # container restart is picked up right away with no separate
+        # crash-recovery special-casing needed.
+        interval = max(self._settings.download_watchdog_interval, 1.0)
+        while self._running:
+            try:
+                await self._retry_stalled_error_jobs()
+            except Exception:
+                logger.exception("Watchdog scan failed")
+            await asyncio.sleep(interval)
+
+    async def _retry_stalled_error_jobs(self) -> None:
+        now = datetime.now(timezone.utc)
+        candidates = 0
+        for job in self._db.list_jobs():
+            if job.state != "error" or job.error_kind != "transient":
+                continue
+            candidates += 1
+            backoff = self._compute_backoff(job.retry_count)
+            elapsed = (now - datetime.fromisoformat(job.updated_at)).total_seconds()
+            if elapsed < backoff:
+                continue
+            logger.warning(
+                "Watchdog: re-queuing job id=%s infohash=%s after %.0fs cooldown "
+                "(retry_count=%d, backoff=%.0fs, last error=%s)",
+                job.id, job.infohash, elapsed, job.retry_count, backoff, job.error,
+            )
+            self._db.update_job_state(job.id, state="queued", progress=0.0, error="", error_kind="")
+            await self._queue.put(job.id)
+        logger.debug("Watchdog: scanned jobs, %d transient-error candidate(s) checked", candidates)
+
+    def _compute_backoff(self, retry_count: int) -> float:
+        exponent = min(max(retry_count, 0), 10)
+        backoff = self._settings.download_retry_backoff_base * (2 ** exponent)
+        return min(backoff, self._settings.download_retry_backoff_max)
 
     async def stop(self) -> None:
         self._running = False
@@ -56,6 +104,10 @@ class DownloadManager:
         if self._workers:
             await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers = []
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            await asyncio.gather(self._watchdog_task, return_exceptions=True)
+            self._watchdog_task = None
         logger.info("Download manager stopped")
 
     async def create_or_enqueue(self, *, infohash: str, category: str) -> Job:
@@ -63,7 +115,11 @@ class DownloadManager:
         if existing:
             if existing.state in {"paused", "error"}:
                 logger.info("Re-enqueuing existing job id=%s (was %s) for infohash=%s", existing.id, existing.state, infohash)
-                self._db.update_job_state(existing.id, state="queued", progress=0.0, error="")
+                # A manual re-add is a deliberate fresh start: clear the
+                # persisted failure history too, not just state/progress.
+                self._db.update_job_state(
+                    existing.id, state="queued", progress=0.0, error="", error_kind="", retry_count=0
+                )
                 await self._queue.put(existing.id)
             else:
                 logger.info("Job already tracked id=%s state=%s for infohash=%s, skipping enqueue", existing.id, existing.state, infohash)
@@ -131,7 +187,7 @@ class DownloadManager:
                 await self._run_job(job_id)
             except Exception as exc:
                 logger.exception("Unhandled error while running job id=%s", job_id)
-                self._db.update_job_state(job_id, state="error", error=str(exc))
+                self._db.record_job_failure(job_id, error=str(exc), error_kind="transient")
             finally:
                 self._queue.task_done()
 
@@ -142,17 +198,20 @@ class DownloadManager:
         release = self._db.get_release(job.infohash)
         if not release:
             logger.error("Job id=%s references missing release infohash=%s", job_id, job.infohash)
-            self._db.update_job_state(job_id, state="error", error="Release not found")
+            self._db.record_job_failure(job_id, error="Release not found", error_kind="permanent")
             return
         self._db.update_job_state(job_id, state="resolving", error="")
-        for attempt in range(self._settings.max_retries + 1):
-            logger.info("Running job id=%s attempt=%d/%d release=%s", job_id, attempt + 1, self._settings.max_retries + 1, release.release_name)
+        max_attempts = self._settings.max_retries + 1
+        for attempt in range(max_attempts):
+            logger.info("Running job id=%s infohash=%s attempt=%d/%d release=%s", job_id, job.infohash, attempt + 1, max_attempts, release.release_name)
             await run_download_job(
                 self._settings,
                 self._db,
                 self._db.get_job(job_id) or job,
                 release,
                 self._processes,
+                attempt=attempt + 1,
+                max_attempts=max_attempts,
             )
             refreshed = self._db.get_job(job_id)
             if refreshed is None or refreshed.state == "paused":
@@ -162,14 +221,21 @@ class DownloadManager:
                 return
             if attempt < self._settings.max_retries:
                 logger.warning(
-                    "Job id=%s failed on attempt %d/%d (error=%s), retrying",
+                    "Job id=%s infohash=%s failed on attempt %d/%d (error=%s), retrying",
                     job_id,
+                    job.infohash,
                     attempt + 1,
-                    self._settings.max_retries + 1,
+                    max_attempts,
                     refreshed.error if refreshed else "unknown",
                 )
                 self._db.update_job_state(job_id, state="queued", progress=0.0)
                 await asyncio.sleep(min(1 + attempt, 3))
                 continue
-            logger.error("Job id=%s exhausted all retries, giving up", job_id)
+            logger.error(
+                "Job id=%s infohash=%s exhausted %d fast attempt(s) (error=%s, error_kind=%s); "
+                "leaving for background watchdog to retry with backoff if transient",
+                job_id, job.infohash, max_attempts,
+                refreshed.error if refreshed else "unknown",
+                refreshed.error_kind if refreshed else "unknown",
+            )
             break

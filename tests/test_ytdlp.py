@@ -56,6 +56,42 @@ def test_build_ytdlp_command_omits_unresolvable_ffmpeg_location(tmp_path) -> Non
     assert "--ffmpeg-location" not in command
 
 
+def test_build_ytdlp_command_includes_verbose_flags_by_default(tmp_path) -> None:
+    settings = Settings(FFMPEG_PATH="ffmpeg-does-not-exist-anywhere")
+    release = _release()
+    output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
+
+    command = build_ytdlp_command(settings, release, output_path)
+
+    assert "-v" in command
+    assert "--downloader-args" in command
+    args_index = command.index("--downloader-args")
+    assert command[args_index + 1] == "ffmpeg:-loglevel verbose"
+
+
+def test_build_ytdlp_command_omits_verbose_flags_when_disabled(tmp_path) -> None:
+    settings = Settings(FFMPEG_PATH="ffmpeg-does-not-exist-anywhere", VERBOSE_DOWNLOADS=False)
+    release = _release()
+    output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
+
+    command = build_ytdlp_command(settings, release, output_path)
+
+    assert "-v" not in command
+    assert "--downloader-args" not in command
+
+
+def test_build_ytdlp_command_includes_concurrent_fragments(tmp_path) -> None:
+    settings = Settings(FFMPEG_PATH="ffmpeg-does-not-exist-anywhere", DOWNLOAD_CONCURRENT_FRAGMENTS=8)
+    release = _release()
+    output_path = tmp_path / "Dune.2021.1080p.WEB-DL.H264.ITA-SC.mkv"
+
+    command = build_ytdlp_command(settings, release, output_path)
+
+    assert "--concurrent-fragments" in command
+    index = command.index("--concurrent-fragments")
+    assert command[index + 1] == "8"
+
+
 def test_build_ytdlp_command_includes_resolvable_ffmpeg_location(tmp_path) -> None:
     ffmpeg_stub = tmp_path / "ffmpeg"
     ffmpeg_stub.write_text("#!/bin/sh\n")
