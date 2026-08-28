@@ -188,6 +188,8 @@ async def _build_releases(
                 release_name=release_name,
                 source_url=variant.url,
                 created_at=now_utc(),
+                codecs=variant.codecs,
+                audio_url=variant.audio_url,
             )
             db.upsert_release(release)
             releases.append(release)

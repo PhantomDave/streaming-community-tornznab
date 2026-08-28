@@ -18,6 +18,16 @@ STREAM_INF_PATTERN = re.compile(r"#EXT-X-STREAM-INF:(?P<attrs>[^\n]+)\n(?P<url>[
 RESOLUTION_PATTERN = re.compile(r"RESOLUTION=\d+x(?P<height>\d+)")
 BANDWIDTH_PATTERN = re.compile(r"BANDWIDTH=(?P<bandwidth>\d+)")
 CODECS_PATTERN = re.compile(r'CODECS="(?P<codecs>[^"]+)"')
+AUDIO_GROUP_PATTERN = re.compile(r'AUDIO="(?P<group>[^"]+)"')
+ATTR_PATTERN = re.compile(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)')
+
+# vixcloud (and other HLS packagers) commonly serve audio as one or more
+# EXT-X-MEDIA renditions in their own GROUP-ID, referenced from
+# #EXT-X-STREAM-INF via AUDIO="...", rather than muxed into the video
+# segments — the STREAM-INF's own CODECS list still names the audio codec
+# even though it lives at a wholly separate URL. A Variant.url pointing only
+# at the video rendition therefore has picture but no sound.
+MEDIA_TAG_PATTERN = re.compile(r"#EXT-X-MEDIA:(?P<attrs>[^\n]+)")
 
 # The iframe endpoint wraps a nested <iframe src="https://vixcloud.co/embed/..."> player.
 IFRAME_SRC_PATTERN = re.compile(r'<iframe[^>]+src="([^"]+)"')
@@ -158,6 +168,7 @@ def _extract_m3u8_url(text: str) -> str | None:
 
 
 def _parse_master_playlist(text: str, base_url: str) -> list[Variant]:
+    audio_groups = _parse_audio_renditions(text, base_url)
     variants: list[Variant] = []
     for match in STREAM_INF_PATTERN.finditer(text):
         attrs = match.group("attrs")
@@ -167,16 +178,62 @@ def _parse_master_playlist(text: str, base_url: str) -> list[Variant]:
             continue
         bandwidth = _extract_bandwidth(attrs)
         codecs = _extract_codecs(attrs)
+        audio_group_match = AUDIO_GROUP_PATTERN.search(attrs)
+        audio_url, audio_label = _select_audio_rendition(
+            audio_groups.get(audio_group_match.group("group"), []) if audio_group_match else []
+        )
         variants.append(
             Variant(
                 resolution=resolution,
                 bandwidth=bandwidth,
                 codecs=codecs,
                 url=urljoin(base_url, raw_url),
+                audio=audio_label or "ITA",
+                audio_url=audio_url,
             )
         )
     variants.sort(key=lambda variant: variant.resolution, reverse=True)
     return variants
+
+
+def _parse_attributes(attrs: str) -> dict[str, str]:
+    return {key: value.strip('"') for key, value in ATTR_PATTERN.findall(attrs)}
+
+
+def _parse_audio_renditions(text: str, base_url: str) -> dict[str, list[tuple[str, str, bool]]]:
+    """Group EXT-X-MEDIA audio renditions by GROUP-ID.
+
+    Each entry is (language, absolute URI, is_default).
+    """
+    groups: dict[str, list[tuple[str, str, bool]]] = {}
+    for match in MEDIA_TAG_PATTERN.finditer(text):
+        attrs = _parse_attributes(match.group("attrs"))
+        if attrs.get("TYPE") != "AUDIO":
+            continue
+        group_id = attrs.get("GROUP-ID")
+        uri = attrs.get("URI")
+        if not group_id or not uri:
+            continue
+        language = attrs.get("LANGUAGE", "").lower()
+        is_default = attrs.get("DEFAULT", "").upper() == "YES"
+        groups.setdefault(group_id, []).append((language, urljoin(base_url, uri), is_default))
+    return groups
+
+
+def _select_audio_rendition(renditions: list[tuple[str, str, bool]]) -> tuple[str, str]:
+    """Pick one audio rendition per settings.preferred_audio_list, falling back
+    to the DEFAULT=YES entry and then the first one listed."""
+    if not renditions:
+        return "", ""
+    for preferred in settings.preferred_audio_list:
+        for language, uri, _ in renditions:
+            if language == preferred:
+                return uri, language.upper()
+    for language, uri, is_default in renditions:
+        if is_default:
+            return uri, language.upper()
+    language, uri, _ = renditions[0]
+    return uri, language.upper()
 
 
 def _extract_resolution(attrs: str) -> int | None:
