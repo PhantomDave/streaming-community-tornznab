@@ -2,18 +2,19 @@ name: claude-review
 
 # Automatic review of non-draft PRs using the Claude GitHub App/action.
 # Claude reviews on every push, checks whether earlier feedback was addressed,
-# and if the PR is clean it approves it and turns on GitHub's native
-# auto-merge (which then merges once required checks pass).
+# and if the PR is clean it comments its verdict and enables GitHub's native
+# auto-merge directly (no formal approving review is left on the PR).
 #
 # Requires (already set up on this repo):
 #   - Claude GitHub App installed, with CLAUDE_CODE_OAUTH_TOKEN repo secret
-#   - Settings > Actions > General > "Allow GitHub Actions to create and
-#     approve pull requests" enabled
-#   - Branch protection on main requiring an approving review, WITH "Dismiss
-#     stale pull request approvals when new commits are pushed" also on, and
-#     the tests.yml jobs marked as required status checks -- without this,
-#     Claude's approval survives later pushes it never reviewed, and
-#     `gh pr merge --auto` below has nothing to wait on
+#   - CLAUDE_PAT repo secret: a PAT for the merge step so the resulting push
+#     is attributed to a real account, not github-actions[bot] -- pushes made
+#     with the default GITHUB_TOKEN don't trigger other on:push workflows
+#     (tests.yml, publish.yml), which silently skipped the Docker build
+#   - main must NOT have branch protection requiring an approving review,
+#     since this workflow no longer submits one -- only required status
+#     checks (e.g. tests.yml) gate the merge that `gh pr merge --auto` below
+#     is waiting on
 
 on:
   pull_request:
@@ -71,10 +72,14 @@ jobs:
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
             --json-schema '{"type":"object","properties":{"approve":{"type":"boolean"},"reason":{"type":"string"}},"required":["approve","reason"]}'
 
-      - name: Approve and enable auto-merge
+      - name: Enable auto-merge
         if: steps.review.outcome == 'success'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # A PAT (not the default GITHUB_TOKEN) so the eventual merge push
+          # is attributed to a real account -- pushes made with GITHUB_TOKEN
+          # don't trigger other workflows (tests.yml, publish.yml), which
+          # silently skipped the Docker build on the last two auto-merges.
+          GH_TOKEN: ${{ secrets.CLAUDE_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REVIEW_OUTPUT: ${{ steps.review.outputs.structured_output }}
         run: |
@@ -93,5 +98,5 @@ jobs:
             echo "Claude did not approve: $REASON"
             exit 0
           fi
-          gh pr review "$PR_NUMBER" --approve --body "$REASON"
+          gh pr comment "$PR_NUMBER" --body "$REASON"
           gh pr merge "$PR_NUMBER" --auto --squash
