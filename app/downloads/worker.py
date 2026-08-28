@@ -8,10 +8,15 @@ from pathlib import Path
 import re
 import time
 
+from typing import TYPE_CHECKING
+
 from app.config import Settings
 from app.db import Database
 from app.downloads.ytdlp import build_output_path, build_ytdlp_command, command_as_string
 from app.models import Job, Release
+
+if TYPE_CHECKING:
+    from app.downloads.manager import SpeedTracker
 
 PROGRESS_PATTERN = re.compile(r"\[download\]\s+(?P<progress>\d+(?:\.\d+)?)%")
 # When the HLS stream is AES-128 encrypted, yt-dlp delegates the actual
@@ -59,6 +64,7 @@ async def run_download_job(
     job: Job,
     release: Release,
     process_registry: dict[str, asyncio.subprocess.Process] | None = None,
+    speed_tracker: "SpeedTracker | None" = None,
     *,
     attempt: int = 1,
     max_attempts: int = 1,
@@ -77,6 +83,8 @@ async def run_download_job(
         job.id, job.infohash, attempt, max_attempts, command_as_string(command),
     )
     db.update_job_state(job.id, state="downloading", progress=0.0, bytes_done=0, bytes_total=max(release.size_estimate, 0), error="", error_kind="")
+    if speed_tracker is not None:
+        speed_tracker.reset(job.id)
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -131,12 +139,15 @@ async def run_download_job(
                         progress = _parse_ffmpeg_progress(line, duration_seconds)
 
                     if progress is not None:
+                        bytes_done = int(release.size_estimate * (progress / 100.0))
                         db.update_job_state(
                             job.id,
                             progress=progress / 100.0,
-                            bytes_done=int(release.size_estimate * (progress / 100.0)),
+                            bytes_done=bytes_done,
                             bytes_total=release.size_estimate,
                         )
+                        if speed_tracker is not None:
+                            speed_tracker.record(job.id, bytes_done)
                         if progress - last_logged_progress >= _LOG_PROGRESS_STEP or progress >= 100.0:
                             logger.info("Job id=%s: progress %.1f%%", job.id, progress)
                             last_logged_progress = progress

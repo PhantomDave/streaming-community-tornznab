@@ -55,12 +55,13 @@ async def app_preferences() -> dict:
 async def torrents_info(
     category: str | None = Query(default=None),
     db: Database = Depends(get_db),
+    manager: DownloadManager = Depends(get_download_manager),
 ) -> list[dict]:
     jobs = db.list_jobs(category=category)
     response: list[dict] = []
     for job in jobs:
         release = db.get_release(job.infohash)
-        response.append(to_qbit_info(job, release))
+        response.append(to_qbit_info(job, release, manager.get_speed(job.id)))
     logger.debug("torrents/info category=%s returned %d job(s)", category, len(response))
     return response
 
@@ -174,9 +175,13 @@ async def torrents_top_prio() -> Response:
 
 
 @router.get("/transfer/info")
-async def transfer_info() -> dict:
+async def transfer_info(
+    db: Database = Depends(get_db),
+    manager: DownloadManager = Depends(get_download_manager),
+) -> dict:
+    total_speed = sum(manager.get_speed(job.id) for job in db.list_jobs() if job.state == "downloading")
     return {
-        "dl_info_speed": 0,
+        "dl_info_speed": int(total_speed),
         "up_info_speed": 0,
         "dl_info_data": 0,
         "up_info_data": 0,

@@ -3,9 +3,18 @@ from __future__ import annotations
 from app.models import Job, Release
 
 
-def to_qbit_info(job: Job, release: Release | None) -> dict:
+_ETA_UNKNOWN = 8640000  # qBittorrent's own sentinel for "infinite/unknown" ETA
+
+
+def to_qbit_info(job: Job, release: Release | None, speed_bps: float = 0.0) -> dict:
     size = max(job.bytes_total, release.size_estimate if release else 0)
     amount_left = max(size - job.bytes_done, 0)
+    if job.progress >= 1.0:
+        eta = 0
+    elif speed_bps > 0:
+        eta = int(amount_left / speed_bps)
+    else:
+        eta = _ETA_UNKNOWN
     return {
         "hash": job.infohash,
         "name": release.release_name if release else job.infohash,
@@ -15,8 +24,8 @@ def to_qbit_info(job: Job, release: Release | None) -> dict:
         "save_path": job.save_path,
         "content_path": job.content_path,
         "category": job.category,
-        "dlspeed": 0,
-        "eta": 0 if job.progress >= 1.0 else 3600,
+        "dlspeed": int(speed_bps),
+        "eta": eta,
         "amount_left": amount_left,
     }
 
