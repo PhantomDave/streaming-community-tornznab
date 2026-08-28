@@ -62,7 +62,16 @@ async def torrents_info(
     for job in jobs:
         release = db.get_release(job.infohash)
         response.append(to_qbit_info(job, release, manager.get_speed(job.id)))
-    logger.debug("torrents/info category=%s returned %d job(s)", category, len(response))
+    logger.info(
+        "torrents/info category=%s polled, returning %d job(s): %s",
+        category,
+        len(response),
+        ", ".join(
+            f"{info['hash']}={info['state']} progress={info['progress']:.0%} "
+            f"dlspeed={info['dlspeed']}B/s eta={info['eta']}s"
+            for info in response
+        ) or "none",
+    )
     return response
 
 
