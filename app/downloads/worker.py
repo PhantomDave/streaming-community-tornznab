@@ -66,6 +66,7 @@ async def run_download_job(
         duration_seconds: float | None = None
         output_lines: list[str] = []
         buffer = b""
+        lines_seen = 0
         while True:
             try:
                 chunk = await asyncio.wait_for(
@@ -73,9 +74,12 @@ async def run_download_job(
                 )
             except asyncio.TimeoutError:
                 logger.error(
-                    "Job id=%s: no output for %.0fs, treating as stalled and killing process",
+                    "Job id=%s: no output for %.0fs (last progress %.1f%%, %d lines seen), "
+                    "treating as stalled and killing process",
                     job.id,
                     settings.download_stall_timeout,
+                    max(last_logged_progress, 0.0),
+                    lines_seen,
                 )
                 stalled = True
                 process.kill()
@@ -85,6 +89,7 @@ async def run_download_job(
 
             raw_lines, buffer = _extract_lines(buffer + chunk)
             for raw_line in raw_lines:
+                lines_seen += 1
                 line = raw_line.decode("utf-8", errors="ignore").strip()
                 if not line:
                     continue
