@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import shutil
+import time
 import uuid
 
 from app.config import Settings
@@ -13,6 +15,43 @@ from app.models import Job
 from app.downloads.worker import run_download_job
 
 logger = logging.getLogger(__name__)
+
+_SPEED_WINDOW_SECONDS = 15.0
+_SPEED_MIN_ELAPSED_SECONDS = 0.5
+
+
+class SpeedTracker:
+    # Tracks a short rolling window of (monotonic_time, bytes_done) samples
+    # per job so speed reflects recent throughput rather than the lifetime
+    # average, which would understate speed after a slow start (e.g. yt-dlp
+    # resolving the stream) and throw off the ETA derived from it.
+    def __init__(self) -> None:
+        self._samples: dict[str, deque[tuple[float, int]]] = {}
+
+    def record(self, job_id: str, bytes_done: int) -> None:
+        samples = self._samples.setdefault(job_id, deque())
+        now = time.monotonic()
+        samples.append((now, bytes_done))
+        cutoff = now - _SPEED_WINDOW_SECONDS
+        while len(samples) > 1 and samples[0][0] < cutoff:
+            samples.popleft()
+
+    def speed(self, job_id: str) -> float:
+        samples = self._samples.get(job_id)
+        if not samples or len(samples) < 2:
+            return 0.0
+        first_time, first_bytes = samples[0]
+        last_time, last_bytes = samples[-1]
+        elapsed = last_time - first_time
+        if elapsed < _SPEED_MIN_ELAPSED_SECONDS:
+            return 0.0
+        return max(0.0, (last_bytes - first_bytes) / elapsed)
+
+    def reset(self, job_id: str) -> None:
+        self._samples.pop(job_id, None)
+
+    def discard(self, job_id: str) -> None:
+        self._samples.pop(job_id, None)
 
 
 class DownloadManager:
@@ -24,6 +63,7 @@ class DownloadManager:
         self._running = False
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._watchdog_task: asyncio.Task | None = None
+        self._speed = SpeedTracker()
 
     async def start(self) -> None:
         if self._running:
@@ -51,6 +91,7 @@ class DownloadManager:
                     job.state,
                 )
                 self._db.update_job_state(job.id, state="queued", progress=0.0, error="", error_kind="")
+                self._speed.reset(job.id)
                 await self._queue.put(job.id)
 
     async def _watchdog_loop(self) -> None:
@@ -89,6 +130,7 @@ class DownloadManager:
                 job.id, job.infohash, elapsed, job.retry_count, backoff, job.error,
             )
             self._db.update_job_state(job.id, state="queued", progress=0.0, error="", error_kind="")
+            self._speed.reset(job.id)
             await self._queue.put(job.id)
         logger.debug("Watchdog: scanned jobs, %d transient-error candidate(s) checked", candidates)
 
@@ -120,6 +162,7 @@ class DownloadManager:
                 self._db.update_job_state(
                     existing.id, state="queued", progress=0.0, error="", error_kind="", retry_count=0
                 )
+                self._speed.reset(existing.id)
                 await self._queue.put(existing.id)
             else:
                 logger.info("Job already tracked id=%s state=%s for infohash=%s, skipping enqueue", existing.id, existing.state, infohash)
@@ -146,6 +189,7 @@ class DownloadManager:
                 # worker's post-termination state check sees "paused" and does
                 # not overwrite it with a completed/error outcome.
                 self._db.update_job_state(job.id, state="paused")
+                self._speed.reset(job.id)
                 self._terminate_process(job.id)
 
     async def resume_hashes(self, hashes: list[str]) -> None:
@@ -162,6 +206,7 @@ class DownloadManager:
             if not job:
                 continue
             self._terminate_process(job.id)
+            self._speed.discard(job.id)
             if delete_files:
                 self._remove_job_files(job)
         self._db.delete_job(hashes)
@@ -210,6 +255,7 @@ class DownloadManager:
                 self._db.get_job(job_id) or job,
                 release,
                 self._processes,
+                self._speed,
                 attempt=attempt + 1,
                 max_attempts=max_attempts,
             )
@@ -229,6 +275,7 @@ class DownloadManager:
                     refreshed.error if refreshed else "unknown",
                 )
                 self._db.update_job_state(job_id, state="queued", progress=0.0)
+                self._speed.reset(job_id)
                 await asyncio.sleep(min(1 + attempt, 3))
                 continue
             logger.error(
@@ -239,3 +286,6 @@ class DownloadManager:
                 refreshed.error_kind if refreshed else "unknown",
             )
             break
+
+    def get_speed(self, job_id: str) -> float:
+        return self._speed.speed(job_id)

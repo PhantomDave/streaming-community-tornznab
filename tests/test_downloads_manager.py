@@ -6,7 +6,7 @@ from pathlib import Path
 from app.config import Settings
 from app.db import Database
 from app.downloads import worker as worker_module
-from app.downloads.manager import DownloadManager
+from app.downloads.manager import DownloadManager, SpeedTracker
 from app.models import Release, now_utc
 
 
@@ -308,3 +308,42 @@ def test_start_recovers_jobs_stuck_from_previous_run(tmp_path, monkeypatch) -> N
     final = db.get_job(job.id)
     assert final is not None
     assert final.state == "completed"
+
+
+def test_speed_tracker_computes_rate_from_recent_samples(monkeypatch) -> None:
+    tracker = SpeedTracker()
+    clock = iter([100.0, 101.0, 102.0])
+    monkeypatch.setattr("app.downloads.manager.time.monotonic", lambda: next(clock))
+
+    tracker.record("job-1", 0)
+    tracker.record("job-1", 1_000_000)
+    tracker.record("job-1", 2_000_000)
+
+    assert tracker.speed("job-1") == 1_000_000.0
+
+
+def test_speed_tracker_returns_zero_without_enough_samples() -> None:
+    tracker = SpeedTracker()
+    assert tracker.speed("unknown-job") == 0.0
+
+    tracker.record("job-1", 500)
+    assert tracker.speed("job-1") == 0.0
+
+
+def test_speed_tracker_reset_and_discard_clear_samples(monkeypatch) -> None:
+    tracker = SpeedTracker()
+    clock = iter([100.0, 101.0, 102.0, 103.0])
+    monkeypatch.setattr("app.downloads.manager.time.monotonic", lambda: next(clock))
+
+    tracker.record("job-1", 0)
+    tracker.record("job-1", 1_000)
+    assert tracker.speed("job-1") > 0.0
+
+    tracker.reset("job-1")
+    assert tracker.speed("job-1") == 0.0
+
+    tracker.record("job-1", 0)
+    tracker.record("job-1", 2_000)
+    assert tracker.speed("job-1") > 0.0
+    tracker.discard("job-1")
+    assert tracker.speed("job-1") == 0.0
