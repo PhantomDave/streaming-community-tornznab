@@ -26,6 +26,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write
 
 jobs:
   review:
@@ -71,13 +72,26 @@ jobs:
             --json-schema '{"type":"object","properties":{"approve":{"type":"boolean"},"reason":{"type":"string"}},"required":["approve","reason"]}'
 
       - name: Approve and enable auto-merge
-        if: >
-          steps.review.outputs.structured_output != '' &&
-          fromJSON(steps.review.outputs.structured_output).approve == true
+        if: steps.review.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          REASON: ${{ fromJSON(steps.review.outputs.structured_output).reason }}
+          REVIEW_OUTPUT: ${{ steps.review.outputs.structured_output }}
         run: |
+          # Parsed here (not via fromJSON() in an `if:`/`env:` expression)
+          # because GitHub Actions statically validates those expressions
+          # for the whole job before checking any `if:` guard, so an empty
+          # REVIEW_OUTPUT (e.g. the review step errored) would fail the
+          # entire job instead of just skipping this step.
+          if [ -z "$REVIEW_OUTPUT" ]; then
+            echo "No structured output from the review step; skipping."
+            exit 0
+          fi
+          APPROVE=$(echo "$REVIEW_OUTPUT" | jq -r '.approve // false')
+          REASON=$(echo "$REVIEW_OUTPUT" | jq -r '.reason // ""')
+          if [ "$APPROVE" != "true" ]; then
+            echo "Claude did not approve: $REASON"
+            exit 0
+          fi
           gh pr review "$PR_NUMBER" --approve --body "$REASON"
           gh pr merge "$PR_NUMBER" --auto --squash
