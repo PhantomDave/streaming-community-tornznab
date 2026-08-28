@@ -1,4 +1,34 @@
-from app.downloads.worker import _parse_ffmpeg_duration, _parse_ffmpeg_progress
+from app.downloads.worker import _extract_lines, _parse_ffmpeg_duration, _parse_ffmpeg_progress
+
+
+def test_extract_lines_splits_on_carriage_return_only_updates() -> None:
+    # ffmpeg repaints its progress stats with '\r' instead of '\n' for long
+    # stretches; the reader must still see each update as a distinct line.
+    buffer = b"time=00:00:10.00\rtime=00:00:20.00\r"
+    lines, remainder = _extract_lines(buffer)
+    assert lines == [b"time=00:00:10.00", b"time=00:00:20.00"]
+    assert remainder == b""
+
+
+def test_extract_lines_keeps_incomplete_trailing_segment_in_buffer() -> None:
+    buffer = b"time=00:00:10.00\rtime=00:00:2"
+    lines, remainder = _extract_lines(buffer)
+    assert lines == [b"time=00:00:10.00"]
+    assert remainder == b"time=00:00:2"
+
+
+def test_extract_lines_handles_mixed_newline_and_carriage_return() -> None:
+    buffer = b"[download] 10%\ntime=00:00:20.00\rtime=00:00:30.00\n"
+    lines, remainder = _extract_lines(buffer)
+    assert lines == [b"[download] 10%", b"time=00:00:20.00", b"time=00:00:30.00"]
+    assert remainder == b""
+
+
+def test_extract_lines_returns_no_lines_without_a_delimiter() -> None:
+    buffer = b"time=00:00:10.0"
+    lines, remainder = _extract_lines(buffer)
+    assert lines == []
+    assert remainder == buffer
 
 
 def test_parse_ffmpeg_duration_extracts_seconds() -> None:
