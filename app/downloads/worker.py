@@ -58,12 +58,29 @@ async def run_download_job(
     if process_registry is not None:
         process_registry[job.id] = process
 
+    stalled = False
     try:
         assert process.stdout is not None
         last_logged_progress = -1.0
         duration_seconds: float | None = None
         output_lines: list[str] = []
-        async for raw_line in process.stdout:
+        while True:
+            try:
+                raw_line = await asyncio.wait_for(
+                    process.stdout.readline(), timeout=settings.download_stall_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Job id=%s: no output for %.0fs, treating as stalled and killing process",
+                    job.id,
+                    settings.download_stall_timeout,
+                )
+                stalled = True
+                process.kill()
+                break
+            if not raw_line:
+                break
+
             line = raw_line.decode("utf-8", errors="ignore").strip()
             if line:
                 output_lines.append(line)
@@ -101,6 +118,15 @@ async def run_download_job(
     # and must not be clobbered with a completed/error outcome.
     current = db.get_job(job.id)
     if current is None or current.state == "paused":
+        return
+
+    if stalled:
+        logger.error("Job id=%s: killed after stalling with no output", job.id)
+        db.update_job_state(
+            job.id,
+            state="error",
+            error=f"Download stalled: no output for {settings.download_stall_timeout:.0f}s",
+        )
         return
 
     if code != 0:

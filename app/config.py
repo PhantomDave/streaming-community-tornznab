@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     ytdlp_path: str = Field(default="yt-dlp", alias="YTDLP_PATH")
     ffmpeg_path: str = Field(default="ffmpeg", alias="FFMPEG_PATH")
     max_retries: int = Field(default=2, alias="MAX_RETRIES")
+    download_stall_timeout: float = Field(default=180.0, alias="DOWNLOAD_STALL_TIMEOUT")
     request_timeout: float = Field(default=20.0, alias="REQUEST_TIMEOUT")
     locale: str = Field(default="it", alias="SC_LOCALE")
     flaresolverr_url: str | None = Field(default=None, alias="FLARESOLVERR_URL")

@@ -30,7 +30,24 @@ class DownloadManager:
         worker_count = max(self._settings.max_concurrent_downloads, 1)
         for _ in range(worker_count):
             self._workers.append(asyncio.create_task(self._worker_loop()))
+        await self._recover_stuck_jobs()
         logger.info("Download manager started with %d worker(s)", worker_count)
+
+    async def _recover_stuck_jobs(self) -> None:
+        # Jobs left in "queued"/"resolving"/"downloading" state after a crash
+        # or restart have no process backing them anymore (the process
+        # registry starts empty) and would otherwise sit stuck forever since
+        # nothing re-populates the in-memory queue on its own.
+        in_flight_states = {"queued", "resolving", "downloading"}
+        for job in self._db.list_jobs():
+            if job.state in in_flight_states:
+                logger.warning(
+                    "Recovering job id=%s stuck in state=%s after restart, re-queuing",
+                    job.id,
+                    job.state,
+                )
+                self._db.update_job_state(job.id, state="queued", progress=0.0, error="")
+                await self._queue.put(job.id)
 
     async def stop(self) -> None:
         self._running = False
