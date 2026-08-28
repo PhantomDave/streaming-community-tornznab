@@ -17,8 +17,9 @@ PROGRESS_PATTERN = re.compile(r"\[download\]\s+(?P<progress>\d+(?:\.\d+)?)%")
 # warning), which never prints "[download] X%" lines. Its own progress shows
 # up instead as "time=HH:MM:SS.ss" against the input duration reported
 # earlier as "Duration: HH:MM:SS.ss". ffmpeg repaints that line with '\r'
-# instead of '\n', so several updates can land in a single line read here —
-# take the last match to get the most recent value.
+# instead of '\n' — the raw-chunk reader below splits on either, but a chunk
+# can still land mid-repaint with more than one update, so take the last
+# match to get the most recent value.
 DURATION_PATTERN = re.compile(r"Duration:\s*(?P<h>\d+):(?P<m>\d+):(?P<s>\d+(?:\.\d+)?)")
 FFMPEG_TIME_PATTERN = re.compile(r"time=(?P<h>\d+):(?P<m>\d+):(?P<s>\d+(?:\.\d+)?)")
 _LOG_PROGRESS_STEP = 10.0
@@ -64,47 +65,8 @@ async def run_download_job(
         last_logged_progress = -1.0
         duration_seconds: float | None = None
         output_lines: list[str] = []
-        buffer = bytearray()
+        buffer = b""
         lines_seen = 0
-
-        def _handle_line(raw_line: bytes) -> None:
-            nonlocal duration_seconds, last_logged_progress, lines_seen
-            lines_seen += 1
-            line = raw_line.decode("utf-8", errors="ignore").strip()
-            if not line:
-                return
-            output_lines.append(line)
-            if len(output_lines) > 50:
-                output_lines.pop(0)
-
-            progress = _parse_progress(line)
-            if progress is None and duration_seconds is None:
-                duration_seconds = _parse_ffmpeg_duration(line)
-                if duration_seconds is not None:
-                    logger.debug("Job id=%s: ffmpeg input duration is %.1fs", job.id, duration_seconds)
-            if progress is None and duration_seconds is not None:
-                progress = _parse_ffmpeg_progress(line, duration_seconds)
-
-            if progress is not None:
-                db.update_job_state(
-                    job.id,
-                    progress=progress / 100.0,
-                    bytes_done=int(release.size_estimate * (progress / 100.0)),
-                    bytes_total=release.size_estimate,
-                )
-                if progress - last_logged_progress >= _LOG_PROGRESS_STEP or progress >= 100.0:
-                    logger.info("Job id=%s: progress %.1f%%", job.id, progress)
-                    last_logged_progress = progress
-            else:
-                logger.debug("Job id=%s: yt-dlp: %s", job.id, line)
-
-        # ffmpeg repaints its progress stats in place with '\r' instead of
-        # ending them with '\n'; readline() only ever splits on '\n', so those
-        # updates would sit unprocessed (invisible to both progress reporting
-        # and the stall timeout below) until an unrelated '\n' happened to
-        # show up, and could eventually overrun readline()'s internal buffer
-        # and raise. Read raw chunks instead and split on either '\r' or '\n'
-        # so each repaint is handled as soon as it arrives.
         while True:
             try:
                 chunk = await asyncio.wait_for(
@@ -122,23 +84,39 @@ async def run_download_job(
                 stalled = True
                 process.kill()
                 break
-
             if not chunk:
-                if buffer:
-                    _handle_line(bytes(buffer))
-                    buffer.clear()
                 break
 
-            buffer.extend(chunk)
-            while True:
-                newline_at = buffer.find(b"\n")
-                cr_at = buffer.find(b"\r")
-                candidates = [i for i in (newline_at, cr_at) if i != -1]
-                if not candidates:
-                    break
-                split_at = min(candidates)
-                _handle_line(bytes(buffer[:split_at]))
-                del buffer[: split_at + 1]
+            raw_lines, buffer = _extract_lines(buffer + chunk)
+            for raw_line in raw_lines:
+                lines_seen += 1
+                line = raw_line.decode("utf-8", errors="ignore").strip()
+                if not line:
+                    continue
+                output_lines.append(line)
+                if len(output_lines) > 50:
+                    output_lines.pop(0)
+
+                progress = _parse_progress(line)
+                if progress is None and duration_seconds is None:
+                    duration_seconds = _parse_ffmpeg_duration(line)
+                    if duration_seconds is not None:
+                        logger.debug("Job id=%s: ffmpeg input duration is %.1fs", job.id, duration_seconds)
+                if progress is None and duration_seconds is not None:
+                    progress = _parse_ffmpeg_progress(line, duration_seconds)
+
+                if progress is not None:
+                    db.update_job_state(
+                        job.id,
+                        progress=progress / 100.0,
+                        bytes_done=int(release.size_estimate * (progress / 100.0)),
+                        bytes_total=release.size_estimate,
+                    )
+                    if progress - last_logged_progress >= _LOG_PROGRESS_STEP or progress >= 100.0:
+                        logger.info("Job id=%s: progress %.1f%%", job.id, progress)
+                        last_logged_progress = progress
+                elif line:
+                    logger.debug("Job id=%s: yt-dlp: %s", job.id, line)
 
         code = await process.wait()
     finally:
@@ -178,6 +156,16 @@ async def run_download_job(
         content_path=str(final_path),
         error="",
     )
+
+
+def _extract_lines(buffer: bytes) -> tuple[list[bytes], bytes]:
+    # ffmpeg-delegated downloads repaint their progress line with '\r' rather
+    # than '\n' for long stretches, so splitting on '\n' alone (as
+    # readline() does) can leave the reader waiting well past a real '\r'
+    # update and misdetect an actively-progressing download as stalled.
+    # Splitting raw bytes on either delimiter keeps every update visible.
+    *lines, remainder = re.split(rb"[\r\n]", buffer)
+    return lines, remainder
 
 
 def _parse_progress(line: str) -> float | None:
