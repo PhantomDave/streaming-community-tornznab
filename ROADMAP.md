@@ -630,54 +630,62 @@ flowchart LR
 ```
 
 ### F0 — Scaffold del progetto
-- [ ] `pyproject.toml` (fastapi, uvicorn, httpx, pydantic-settings, yt-dlp), layout `app/`.
-- [ ] `config.py`, `logging.py`, `main.py` con `/health`.
-- [ ] `Dockerfile`, `docker-compose.yml`, `.env.example`, `.dockerignore`.
+- [x] `pyproject.toml` (fastapi, uvicorn, httpx, pydantic-settings, yt-dlp), layout `app/`.
+- [x] `config.py`, `logging.py`, `main.py` con `/health`.
+- [x] `Dockerfile`, `docker-compose.yml`, `.env.example`, `.dockerignore`.
 
 ### F1 — Client StreamingCommunity  *(blocca F2, F4)*
-- [ ] `sc/client.py` (httpx, headers, retry, cache).
-- [ ] `sc/search.py` → `Title[]`.
-- [ ] `sc/titles.py` → stagioni/episodi (X-Inertia).
-- [ ] `sc/resolver.py` → master m3u8 + `Variant[]` + media url.
-- [ ] Test con httpx mockato.
+- [x] `sc/client.py` (httpx, headers, retry, cache).
+- [x] `sc/search.py` → `Title[]`.
+- [x] `sc/titles.py` → stagioni/episodi (X-Inertia).
+- [x] `sc/resolver.py` → master m3u8 + `Variant[]` + media url.
+- [x] Test con httpx mockato; inoltre suite `pytest -m integration` verde contro
+      `streamingcommunityz.studio` reale (search, episodi, resolver film/TV).
 
 ### F2 — Indexer Torznab  *(dopo F1; parallelo a F3)*
-- [ ] `torznab/caps.py`, `categories.py`, `naming.py`.
-- [ ] `torznab/feed.py` (una release per qualità, size stimata, `torznab:attr`).
-- [ ] `torznab/router.py` (`search`/`tvsearch`/`movie`, ricerca per ID + TMDb opz.).
-- [ ] `magnet.py` (encode/decode infohash).
-- [ ] Test caps + feed + naming + magnet.
+- [x] `torznab/caps.py`, `categories.py`, `naming.py`.
+- [x] `torznab/feed.py` (una release per qualità, size stimata, `torznab:attr`).
+- [x] `torznab/router.py` (`search`/`tvsearch`/`movie`, ricerca per ID + TMDb opz.).
+- [x] `magnet.py` (encode/decode infohash).
+- [x] Test caps + feed + naming + magnet.
 
 ### F3 — Emulazione qBittorrent  *(parallelo a F2)*
-- [ ] `qbit/router.py` (auth, app, torrents info/add/delete/categories, stub transfer).
-- [ ] `qbit/models.py` (mappa `Job` → payload qBit).
-- [ ] Test API con client HTTP.
+- [x] `qbit/router.py` (auth, app, torrents info/add/delete/categories, stub transfer).
+- [x] `qbit/models.py` (mappa `Job` → payload qBit).
+- [x] Test API con client HTTP.
 
 ### F4 — Download worker  *(dopo F1 e F3)*
-- [ ] `downloads/manager.py` (coda asyncio, stato, retry).
-- [ ] `downloads/worker.py` + `ytdlp.py` (subprocess, progress, atomic move).
-- [ ] Job persistiti su DB; integrazione con `torrents/info`.
+- [x] `downloads/manager.py` (coda asyncio, stato, retry).
+- [x] `downloads/worker.py` + `ytdlp.py` (subprocess, progress, atomic move).
+- [x] Job persistiti su DB; integrazione con `torrents/info`.
 
 ### F5 — Integrazione & verifica E2E
-- [ ] docker-compose completo; wiring Prowlarr/Sonarr/Radarr.
-- [ ] Test end-to-end su un titolo reale.
-- [ ] `README.md` con setup passo-passo.
+- [x] docker-compose completo; wiring Prowlarr/Sonarr/Radarr (vedi README.md).
+- [x] `README.md` con setup passo-passo.
+- [ ] Test end-to-end su un titolo reale: ricerca+resolve verificati live
+      (`pytest -m integration`), ma il ciclo completo grab→download→import in
+      un vero stack Prowlarr/Sonarr/Radarr resta da eseguire manualmente
+      (richiede un homelab live — vedi §16, righe 3–8).
 
 ---
 
 ## 16. Piano di verifica
 
-| # | Verifica | Esito atteso |
-|---|----------|--------------|
-| 1 | `curl /health` | `200 OK`. |
-| 2 | `curl "/torznab/api?t=caps"` | XML capabilities valido. |
-| 3 | Prowlarr → Generic Torznab → **Test** | Verde. |
-| 4 | Ricerca in Prowlarr (film noto) | ≥1 item per qualità. |
-| 5 | Sonarr/Radarr → qBittorrent → **Test** | Verde. |
-| 6 | Grab manuale di una release | Job creato, `state=downloading`. |
-| 7 | Completamento download | File `.mkv` in `{cat}/{ReleaseName}/`. |
-| 8 | Import *Arr | File importato (hardlink/move). |
-| 9 | `pytest` | Suite verde (client, naming, magnet, caps, feed, qbit). |
+| # | Verifica | Esito atteso | Stato |
+|---|----------|--------------|-------|
+| 1 | `curl /health` | `200 OK`. | ✅ coperto da `test_qbit_api.py::test_health`. |
+| 2 | `curl "/torznab/api?t=caps"` | XML capabilities valido. | ✅ coperto da `test_torznab_caps.py`. |
+| 3 | Prowlarr → Generic Torznab → **Test** | Verde. | ⏳ richiede uno stack Prowlarr live — da eseguire manualmente. |
+| 4 | Ricerca in Prowlarr (film noto) | ≥1 item per qualità. | ⏳ richiede uno stack Prowlarr live — da eseguire manualmente. |
+| 5 | Sonarr/Radarr → qBittorrent → **Test** | Verde. | ⏳ richiede uno stack Sonarr/Radarr live — da eseguire manualmente. |
+| 6 | Grab manuale di una release | Job creato, `state=downloading`. | ⏳ richiede uno stack *Arr live — da eseguire manualmente. |
+| 7 | Completamento download | File `.mkv` in `{cat}/{ReleaseName}/`. | ⏳ richiede uno stack *Arr live — da eseguire manualmente. |
+| 8 | Import *Arr | File importato (hardlink/move). | ⏳ richiede uno stack *Arr live — da eseguire manualmente. |
+| 9 | `pytest` | Suite verde (client, naming, magnet, caps, feed, qbit). | ✅ `58 passed, 8 skipped`; con `RUN_INTEGRATION_TESTS=1 pytest -m integration` anche le 8 live contro `streamingcommunityz.studio` passano. |
+
+> Righe 3–8 non sono verificabili da questo ambiente: richiedono un'istanza
+> reale di Prowlarr/Sonarr/Radarr collegata al servizio. Restano un checklist
+> manuale per chi esegue il deploy.
 
 ---
 
