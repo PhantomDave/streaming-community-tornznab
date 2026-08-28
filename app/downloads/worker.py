@@ -151,11 +151,15 @@ async def run_download_job(
                         if progress - last_logged_progress >= _LOG_PROGRESS_STEP or progress >= 100.0:
                             logger.info("Job id=%s: progress %.1f%%", job.id, progress)
                             last_logged_progress = progress
-                        if progress > last_progress_value or last_progress_value < 0:
-                            # Only a genuine increase counts as real forward
-                            # progress; a repeated/non-advancing value (e.g. an
+                        if progress != last_progress_value or last_progress_value < 0:
+                            # Any change counts as real forward progress, not
+                            # just an increase: when a release needs separate
+                            # video/audio HLS tracks (bv+ba), yt-dlp finishes
+                            # one file at 100% and then starts the next from
+                            # 0%, so percentage legitimately drops between
+                            # formats. A repeated/non-advancing value (e.g. an
                             # ffmpeg time= line stuck on the same timestamp)
-                            # must NOT reset the stall clock, or a frozen
+                            # still must NOT reset the stall clock, or a frozen
                             # process that keeps emitting output would never
                             # be detected as stalled.
                             last_progress_value = progress
