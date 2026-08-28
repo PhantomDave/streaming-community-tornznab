@@ -164,3 +164,4 @@ pytest -q -m integration
 ## Documentazione aggiuntiva
 
 - `ROADMAP.md` contiene il documento esteso con architettura, flussi, API e piano progettuale.
+- a
