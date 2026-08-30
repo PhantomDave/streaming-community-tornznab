@@ -22,5 +22,6 @@ def build_caps_xml() -> str:
     ET.SubElement(tv, "subcat", {"id": "5030", "name": "SD"})
     ET.SubElement(tv, "subcat", {"id": "5040", "name": "HD"})
     ET.SubElement(tv, "subcat", {"id": "5045", "name": "UHD"})
+    ET.SubElement(tv, "subcat", {"id": "5070", "name": "Anime"})
 
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(caps, encoding="unicode")

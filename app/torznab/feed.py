@@ -29,7 +29,7 @@ def build_feed_xml(*, query: str, releases: list[Release]) -> str:
         ET.SubElement(item, "enclosure", {"url": magnet, "type": "application/x-bittorrent"})
         ET.SubElement(item, "size").text = str(release.size_estimate)
         ET.SubElement(item, "pubDate").text = _format_date(release.created_at)
-        ET.SubElement(item, f"{{{TORZNAB_NS}}}attr", {"name": "category", "value": str(category_for_release(release.sc_type, release.resolution))})
+        ET.SubElement(item, f"{{{TORZNAB_NS}}}attr", {"name": "category", "value": str(category_for_release(release.source, release.sc_type, release.resolution))})
         ET.SubElement(item, f"{{{TORZNAB_NS}}}attr", {"name": "seeders", "value": "100"})
         ET.SubElement(item, f"{{{TORZNAB_NS}}}attr", {"name": "peers", "value": "100"})
         ET.SubElement(item, f"{{{TORZNAB_NS}}}attr", {"name": "magneturl", "value": magnet})
