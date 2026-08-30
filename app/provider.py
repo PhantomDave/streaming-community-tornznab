@@ -56,4 +56,11 @@ def build_provider_registry(settings: Settings, db: Database) -> ProviderRegistr
     from app.sc.provider import SCProvider
 
     providers: dict[str, Provider] = {"sc": SCProvider(StreamingCommunityClient(settings, db))}
+
+    if settings.animeunity_base_url:
+        from app.animeunity.client import AnimeUnityClient
+        from app.animeunity.provider import AnimeUnityProvider
+
+        providers["animeunity"] = AnimeUnityProvider(AnimeUnityClient(settings, db))
+
     return ProviderRegistry(providers)

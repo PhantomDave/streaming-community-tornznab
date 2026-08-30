@@ -2,8 +2,10 @@ import asyncio
 
 import pytest
 
+from app.config import Settings
+from app.db import Database
 from app.models import Episode, Title, Variant
-from app.provider import Provider, ProviderRegistry
+from app.provider import Provider, ProviderRegistry, build_provider_registry
 
 
 class _StubProvider(Provider):
@@ -51,3 +53,17 @@ def test_registry_close_closes_every_provider() -> None:
     registry = ProviderRegistry({"sc": TrackingProvider("sc"), "animeunity": TrackingProvider("animeunity")})
     asyncio.run(registry.close())
     assert sorted(closed) == ["animeunity", "sc"]
+
+
+def test_build_provider_registry_registers_only_sc_by_default(tmp_path) -> None:
+    settings = Settings(animeunity_base_url=None)
+    db = Database(str(tmp_path / "registry.db"))
+    registry = build_provider_registry(settings, db)
+    assert [p.source for p in registry.all()] == ["sc"]
+
+
+def test_build_provider_registry_registers_animeunity_when_configured(tmp_path) -> None:
+    settings = Settings(animeunity_base_url="https://www.animeunity.so")
+    db = Database(str(tmp_path / "registry.db"))
+    registry = build_provider_registry(settings, db)
+    assert sorted(p.source for p in registry.all()) == ["animeunity", "sc"]

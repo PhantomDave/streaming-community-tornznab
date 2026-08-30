@@ -11,7 +11,7 @@ L'app gira su FastAPI e ascolta di default sulla porta `9118`.
 
 - Python `3.13+`
 - `ffmpeg`
-- accesso a un'istanza StreamingCommunity compatibile
+- accesso ad almeno una fonte tra StreamingCommunity e AnimeUnity
 - Docker opzionale per il deploy
 
 ## Configurazione
@@ -22,6 +22,7 @@ L'app gira su FastAPI e ascolta di default sulla porta `9118`.
    ```
 2. Imposta almeno queste variabili:
    - `SC_BASE_URL`
+   - `ANIMEUNITY_BASE_URL` (opzionale — abilita il provider AnimeUnity come seconda fonte)
    - `PUBLIC_URL`
    - `TORZNAB_API_KEY`
    - `QBIT_USERNAME`
