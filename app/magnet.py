@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 @dataclass(slots=True)
 class MagnetDescriptor:
+    source: str
     sc_id: int
     sc_type: str
     slug: str
@@ -16,7 +17,7 @@ class MagnetDescriptor:
     audio: str
 
     def canonical(self) -> str:
-        return f"{self.sc_id}:{self.sc_type}:{self.slug}:{self.season or 0}:{self.episode or 0}:{self.resolution}:{self.audio.lower()}"
+        return f"{self.source}:{self.sc_id}:{self.sc_type}:{self.slug}:{self.season or 0}:{self.episode or 0}:{self.resolution}:{self.audio.lower()}"
 
 
 def infohash_from_descriptor(descriptor: MagnetDescriptor) -> str:

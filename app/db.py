@@ -79,7 +79,8 @@ class Database:
                     source_url TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     codecs TEXT NOT NULL DEFAULT '',
-                    audio_url TEXT NOT NULL DEFAULT ''
+                    audio_url TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT 'sc'
                 );
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
@@ -96,7 +97,8 @@ class Database:
                     updated_at TEXT NOT NULL,
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     error_kind TEXT,
-                    last_progress_at TEXT
+                    last_progress_at TEXT,
+                    source TEXT NOT NULL DEFAULT 'sc'
                 );
                 CREATE TABLE IF NOT EXISTS categories (
                     name TEXT PRIMARY KEY
@@ -123,6 +125,8 @@ class Database:
         for col_name in ("codecs", "audio_url"):
             if col_name not in existing_cols:
                 conn.execute(f"ALTER TABLE releases ADD COLUMN {col_name} TEXT NOT NULL DEFAULT ''")
+        if "source" not in existing_cols:
+            conn.execute("ALTER TABLE releases ADD COLUMN source TEXT NOT NULL DEFAULT 'sc'")
 
     def _migrate_jobs_table(self, conn: sqlite3.Connection) -> None:
         # Additive migration for jobs DBs created before retry_count/error_kind/
@@ -134,6 +138,7 @@ class Database:
             ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
             ("error_kind", "TEXT"),
             ("last_progress_at", "TEXT"),
+            ("source", "TEXT NOT NULL DEFAULT 'sc'"),
         ):
             if col_name not in existing_cols:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_def}")
@@ -145,8 +150,8 @@ class Database:
                 INSERT INTO releases (
                     infohash, sc_id, sc_type, slug, title, year, season, episode,
                     resolution, audio, size_estimate, release_name, source_url, created_at,
-                    codecs, audio_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    codecs, audio_url, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(infohash) DO UPDATE SET
                     source_url = excluded.source_url,
                     size_estimate = excluded.size_estimate,
@@ -171,6 +176,7 @@ class Database:
                     release.created_at,
                     release.codecs,
                     release.audio_url,
+                    release.source,
                 ),
             )
 
@@ -189,17 +195,19 @@ class Database:
             ).fetchall()
         return [Release(**dict(row)) for row in rows]
 
-    def create_job(self, job_id: str, infohash: str, category: str, save_path: str, content_path: str) -> Job:
+    def create_job(
+        self, job_id: str, infohash: str, category: str, save_path: str, content_path: str, source: str = "sc"
+    ) -> Job:
         now = _utc_now()
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO jobs (
                     id, infohash, category, state, progress, bytes_done, bytes_total,
-                    save_path, content_path, error, created_at, updated_at
-                ) VALUES (?, ?, ?, 'queued', 0.0, 0, 0, ?, ?, NULL, ?, ?)
+                    save_path, content_path, error, created_at, updated_at, source
+                ) VALUES (?, ?, ?, 'queued', 0.0, 0, 0, ?, ?, NULL, ?, ?, ?)
                 """,
-                (job_id, infohash, category, save_path, content_path, now, now),
+                (job_id, infohash, category, save_path, content_path, now, now, source),
             )
         job = self.get_job(job_id)
         if not job:

@@ -174,7 +174,7 @@ class DownloadManager:
         save_path = str(Path(self._settings.download_path) / category)
         content_path = str(Path(save_path) / release.release_name / f"{release.release_name}.mkv")
         job_id = str(uuid.uuid4())
-        job = self._db.create_job(job_id, infohash, category, save_path, content_path)
+        job = self._db.create_job(job_id, infohash, category, save_path, content_path, source=release.source)
         self._db.ensure_category(category)
         await self._queue.put(job.id)
         logger.info("Created job id=%s for infohash=%s release=%s category=%s", job.id, infohash, release.release_name, category)

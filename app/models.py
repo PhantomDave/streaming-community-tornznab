@@ -11,10 +11,14 @@ def now_utc() -> str:
 
 @dataclass(slots=True)
 class Title:
+    # sc_id/sc_type predate the multi-provider split and are now shared by
+    # every provider (StreamingCommunity, AnimeUnity, ...), not renamed to
+    # avoid a much larger diff for no behavioral gain.
     sc_id: int
     slug: str
     name: str
     sc_type: str
+    source: str = "sc"
     year: int | None = None
     tmdb_id: int | None = None
 
@@ -54,6 +58,7 @@ class Release:
     created_at: str
     codecs: str = ""
     audio_url: str = ""
+    source: str = "sc"
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -76,6 +81,7 @@ class Job:
     retry_count: int = 0
     error_kind: str | None = None
     last_progress_at: str | None = None
+    source: str = "sc"
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

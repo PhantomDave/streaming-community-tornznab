@@ -33,7 +33,7 @@ async def search_titles(client: StreamingCommunityClient, query: str) -> list[Ti
         tmdb_id = item.get("tmdb_id")
         if not isinstance(tmdb_id, int):
             tmdb_id = None
-        titles.append(Title(sc_id=sc_id, slug=slug, name=name, sc_type=sc_type, year=year, tmdb_id=tmdb_id))
+        titles.append(Title(sc_id=sc_id, slug=slug, name=name, sc_type=sc_type, source="sc", year=year, tmdb_id=tmdb_id))
     logger.info("SC search %r matched %d title(s)", query, len(titles))
     return titles
 

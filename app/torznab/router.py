@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.config import settings
-from app.deps import get_db, get_sc_client
+from app.deps import get_db, get_provider_registry
 from app.db import Database
 from app.magnet import MagnetDescriptor, infohash_from_descriptor, torrent_stub_payload
-from app.models import Release, Title, Variant, now_utc
-from app.sc.client import StreamingCommunityClient
-from app.sc.resolver import resolve_variants
-from app.sc.search import search_titles
-from app.sc.titles import get_season_episodes
+from app.models import Episode, Release, Title, Variant, now_utc
+from app.provider import Provider, ProviderRegistry
 from app.torznab.caps import build_caps_xml
 from app.torznab.feed import build_feed_xml
 from app.torznab.naming import build_release_name
@@ -37,7 +33,7 @@ async def torznab_api(
     season: int | None = Query(default=None),
     ep: int | None = Query(default=None),
     db: Database = Depends(get_db),
-    sc_client: StreamingCommunityClient = Depends(get_sc_client),
+    registry: ProviderRegistry = Depends(get_provider_registry),
 ) -> Response:
     logger.info("Torznab request t=%s q=%r cat=%s imdbid=%s tmdbid=%s tvdbid=%s season=%s ep=%s", t, q, cat, imdbid, tmdbid, tvdbid, season, ep)
 
@@ -60,29 +56,41 @@ async def torznab_api(
         if cached_releases:
             logger.info("Torznab empty-query search served %d cached release(s)", len(cached_releases))
             return Response(content=build_feed_xml(query="", releases=cached_releases), media_type="application/xml")
-        titles = await _discover_titles(sc_client)
-        releases = await _build_releases(
-            db,
-            sc_client,
-            titles[: limit + offset],
-            search_type=t,
-            season=season,
-            episode=ep,
-        )
-        logger.info("Torznab discovery search built %d release(s) from %d title(s)", len(releases), len(titles))
+        releases: list[Release] = []
+        title_count = 0
+        for provider in registry.all():
+            titles = await _discover_titles(provider)
+            title_count += len(titles)
+            releases.extend(
+                await _build_releases(
+                    db,
+                    provider,
+                    titles[: limit + offset],
+                    search_type=t,
+                    season=season,
+                    episode=ep,
+                )
+            )
+        logger.info("Torznab discovery search built %d release(s) from %d title(s)", len(releases), title_count)
         return Response(content=build_feed_xml(query="", releases=releases[offset : offset + limit]), media_type="application/xml")
 
-    titles = await _safe_search(sc_client, query)
-    sliced = titles[offset : offset + limit]
-    releases = await _build_releases(
-        db,
-        sc_client,
-        sliced,
-        search_type=t,
-        season=season,
-        episode=ep,
-    )
-    logger.info("Torznab search t=%s q=%r built %d release(s) from %d title(s)", t, query, len(releases), len(sliced))
+    releases = []
+    title_count = 0
+    for provider in registry.all():
+        titles = await _safe_search(provider, query)
+        sliced = titles[offset : offset + limit]
+        title_count += len(sliced)
+        releases.extend(
+            await _build_releases(
+                db,
+                provider,
+                sliced,
+                search_type=t,
+                season=season,
+                episode=ep,
+            )
+        )
+    logger.info("Torznab search t=%s q=%r built %d release(s) from %d title(s)", t, query, len(releases), title_count)
     return Response(content=build_feed_xml(query=query, releases=releases), media_type="application/xml")
 
 
@@ -106,16 +114,16 @@ def _build_query(*, q: str | None, imdbid: str | None, tmdbid: str | None, tvdbi
     return ""
 
 
-async def _safe_search(sc_client: StreamingCommunityClient, query: str) -> list[Title]:
+async def _safe_search(provider: Provider, query: str) -> list[Title]:
     try:
-        return await search_titles(sc_client, query)
+        return await provider.search_titles(query)
     except Exception:
         return []
 
 
-async def _discover_titles(sc_client: StreamingCommunityClient) -> list[Title]:
+async def _discover_titles(provider: Provider) -> list[Title]:
     for term in _DISCOVERY_TERMS:
-        titles = await _safe_search(sc_client, term)
+        titles = await _safe_search(provider, term)
         if titles:
             return titles
     return []
@@ -123,7 +131,7 @@ async def _discover_titles(sc_client: StreamingCommunityClient) -> list[Title]:
 
 async def _build_releases(
     db: Database,
-    sc_client: StreamingCommunityClient,
+    provider: Provider,
     titles: list[Title],
     *,
     search_type: str,
@@ -140,13 +148,13 @@ async def _build_releases(
         selected_episode_number = episode
         selected_season = season
         if title.sc_type.lower() == "tv" and season is not None and episode is not None:
-            episodes = await _safe_episodes(sc_client, title.sc_id, title.slug, season)
+            episodes = await _safe_episodes(provider, title.sc_id, title.slug, season)
             selected = next((ep_item for ep_item in episodes if ep_item.number == episode), None)
             selected_episode_id = selected.id if selected else None
             selected_episode_number = selected.number if selected else episode
         variants = await _safe_variants(
-            sc_client,
-            sc_id=title.sc_id,
+            provider,
+            id=title.sc_id,
             slug=title.slug,
             season=selected_season,
             episode_id=selected_episode_id,
@@ -154,6 +162,7 @@ async def _build_releases(
         selected_variants = variants or _fallback_variants()
         for variant in selected_variants:
             descriptor = MagnetDescriptor(
+                source=provider.source,
                 sc_id=title.sc_id,
                 sc_type=title.sc_type,
                 slug=title.slug,
@@ -190,6 +199,7 @@ async def _build_releases(
                 created_at=now_utc(),
                 codecs=variant.codecs,
                 audio_url=variant.audio_url,
+                source=provider.source,
             )
             db.upsert_release(release)
             releases.append(release)
@@ -206,22 +216,22 @@ def _estimate_size(bandwidth: int | None, duration_seconds: int = 5400) -> int:
     return int((bandwidth * duration_seconds) / 8)
 
 
-async def _safe_episodes(sc_client: StreamingCommunityClient, sc_id: int, slug: str, season: int):
+async def _safe_episodes(provider: Provider, id: int, slug: str, season: int) -> list[Episode]:
     try:
-        return await get_season_episodes(sc_client, sc_id, slug, season)
+        return await provider.get_season_episodes(id, slug, season)
     except Exception:
         return []
 
 
 async def _safe_variants(
-    sc_client: StreamingCommunityClient,
+    provider: Provider,
     *,
-    sc_id: int,
+    id: int,
     slug: str,
     season: int | None,
     episode_id: int | None,
-):
+) -> list[Variant]:
     try:
-        return await resolve_variants(sc_client, sc_id=sc_id, slug=slug, season=season, episode_id=episode_id)
+        return await provider.resolve_variants(id, slug, season, episode_id)
     except Exception:
         return []

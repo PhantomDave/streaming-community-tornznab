@@ -1,17 +1,45 @@
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 
 from fastapi.testclient import TestClient
 
-import app.torznab.router as torznab_router
 from app.config import settings
 from app.db import Database
-from app.deps import get_db, get_sc_client
+from app.deps import get_db, get_provider_registry
 from app.main import app
 from app.models import Episode, Release, Title, Variant, now_utc
+from app.provider import Provider, ProviderRegistry
 
 
 def _parse_feed(xml_payload: str) -> ET.Element:
     return ET.fromstring(xml_payload)
+
+
+class FakeProvider(Provider):
+    source = "sc"
+
+    def __init__(
+        self,
+        *,
+        search: Callable[[str], list[Title]] | None = None,
+        episodes: Callable[[int, str, int], list[Episode]] | None = None,
+        variants: Callable[[int, str, int | None, int | None], list[Variant]] | None = None,
+    ) -> None:
+        self._search = search or (lambda query: [])
+        self._episodes = episodes or (lambda id, slug, season: [])
+        self._variants = variants or (lambda id, slug, season, episode_id: [])
+
+    async def search_titles(self, query: str) -> list[Title]:
+        return self._search(query)
+
+    async def get_title_details(self, id: int, slug: str) -> dict:
+        return {}
+
+    async def get_season_episodes(self, id: int, slug: str, season: int) -> list[Episode]:
+        return self._episodes(id, slug, season)
+
+    async def resolve_variants(self, id: int, slug: str, season: int | None, episode_id: int | None) -> list[Variant]:
+        return self._variants(id, slug, season, episode_id)
 
 
 def _sample_release(infohash: str = "hash1") -> Release:
@@ -45,24 +73,23 @@ def test_torznab_unsupported_function_returns_400() -> None:
     assert response.status_code == 400
 
 
-def test_torznab_empty_query_returns_discovery_feed(tmp_path, monkeypatch) -> None:
+def test_torznab_empty_query_returns_discovery_feed(tmp_path) -> None:
     db = Database(str(tmp_path / "torznab.db"))
     search_queries: list[str] = []
 
-    async def fake_search_titles(_client, query: str) -> list[Title]:
+    def fake_search(query: str) -> list[Title]:
         search_queries.append(query)
         if query == "Dune":
             return [Title(sc_id=1, slug="dune", name="Dune", sc_type="movie", year=2021)]
         return []
 
-    async def fake_resolve_variants(_client, *, sc_id: int, slug: str, season: int | None, episode_id: int | None) -> list[Variant]:
-        assert (sc_id, slug, season, episode_id) == (1, "dune", None, None)
+    def fake_variants(id: int, slug: str, season: int | None, episode_id: int | None) -> list[Variant]:
+        assert (id, slug, season, episode_id) == (1, "dune", None, None)
         return [Variant(resolution=1080, bandwidth=2_800_000, url="https://cdn.example/video.m3u8", codecs="avc1.640028")]
 
-    monkeypatch.setattr(torznab_router, "search_titles", fake_search_titles)
-    monkeypatch.setattr(torznab_router, "resolve_variants", fake_resolve_variants)
+    provider = FakeProvider(search=fake_search, variants=fake_variants)
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_sc_client] = lambda: object()
+    app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry({"sc": provider})
     try:
         with TestClient(app) as client:
             response = client.get("/torznab/api", params={"t": "search", "apikey": settings.torznab_api_key})
@@ -85,22 +112,22 @@ def test_torznab_blank_tvsearch_returns_empty_feed() -> None:
     assert root.findall("./channel/item") == []
 
 
-def test_torznab_search_filters_results_and_generates_torrent(tmp_path, monkeypatch) -> None:
+def test_torznab_search_filters_results_and_generates_torrent(tmp_path) -> None:
     db = Database(str(tmp_path / "torznab.db"))
 
-    async def fake_search_titles(_client, query: str) -> list[Title]:
+    def fake_search(query: str) -> list[Title]:
         assert query == "query"
         return [
             Title(sc_id=1, slug="dune", name="Dune", sc_type="movie", year=2021),
             Title(sc_id=2, slug="breaking-bad", name="Breaking Bad", sc_type="tv"),
         ]
 
-    async def fake_get_season_episodes(_client, sc_id: int, slug: str, season: int) -> list[Episode]:
-        assert (sc_id, slug, season) == (2, "breaking-bad", 3)
+    def fake_episodes(id: int, slug: str, season: int) -> list[Episode]:
+        assert (id, slug, season) == (2, "breaking-bad", 3)
         return [Episode(id=77, number=7, name="One Minute")]
 
-    async def fake_resolve_variants(_client, *, sc_id: int, slug: str, season: int | None, episode_id: int | None) -> list[Variant]:
-        if sc_id == 1:
+    def fake_variants(id: int, slug: str, season: int | None, episode_id: int | None) -> list[Variant]:
+        if id == 1:
             assert slug == "dune"
             assert season is None
             assert episode_id is None
@@ -108,11 +135,9 @@ def test_torznab_search_filters_results_and_generates_torrent(tmp_path, monkeypa
             assert (slug, season, episode_id) == ("breaking-bad", 3, 77)
         return [Variant(resolution=1080, bandwidth=2_800_000, url="https://cdn.example/video.m3u8", codecs="avc1.640028")]
 
-    monkeypatch.setattr(torznab_router, "search_titles", fake_search_titles)
-    monkeypatch.setattr(torznab_router, "get_season_episodes", fake_get_season_episodes)
-    monkeypatch.setattr(torznab_router, "resolve_variants", fake_resolve_variants)
+    provider = FakeProvider(search=fake_search, episodes=fake_episodes, variants=fake_variants)
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_sc_client] = lambda: object()
+    app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry({"sc": provider})
     try:
         with TestClient(app) as client:
             movie_response = client.get(

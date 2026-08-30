@@ -80,6 +80,15 @@ def test_release_upsert_updates_selected_fields(tmp_path) -> None:
     assert stored.title == "Dune"
 
 
+def test_release_source_defaults_to_sc(tmp_path) -> None:
+    db = Database(str(tmp_path / "source.db"))
+    release = _sample_release("hash-source")
+    db.upsert_release(release)
+    stored = db.get_release("hash-source")
+    assert stored is not None
+    assert stored.source == "sc"
+
+
 def test_opening_pre_migration_db_adds_new_job_columns_without_losing_rows(tmp_path) -> None:
     # Simulates a jobs table created before retry_count/error_kind/
     # last_progress_at existed (no migration framework — Database must patch
@@ -173,6 +182,49 @@ def test_opening_pre_migration_db_adds_new_release_columns_without_losing_rows(t
     assert reloaded is not None
     assert reloaded.codecs == "avc1.640028,mp4a.40.2"
     assert reloaded.audio_url == "https://example.test/audio.m3u8"
+
+
+def test_opening_pre_migration_db_backfills_source_column(tmp_path) -> None:
+    # Simulates a releases table created before the `source` discriminator
+    # existed (pre multi-provider support) — existing rows must backfill to
+    # 'sc' via the additive ALTER TABLE migration, not break on read.
+    db_path = tmp_path / "legacy_source.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE releases (
+            infohash TEXT PRIMARY KEY,
+            sc_id INTEGER NOT NULL,
+            sc_type TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            title TEXT NOT NULL,
+            year INTEGER,
+            season INTEGER,
+            episode INTEGER,
+            resolution INTEGER NOT NULL,
+            audio TEXT NOT NULL,
+            size_estimate INTEGER NOT NULL,
+            release_name TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            codecs TEXT NOT NULL DEFAULT '',
+            audio_url TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO releases VALUES ('hash-legacy-source', 1, 'movie', 'dune', 'Dune', 2021, NULL, NULL, "
+        "1080, 'ITA', 123456, 'Dune.2021.1080p.WEB-DL.H264.ITA-SC', 'https://example.test/master.m3u8', "
+        "'2024-01-01T00:00:00+00:00', '', '')"
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(str(db_path))
+
+    release = db.get_release("hash-legacy-source")
+    assert release is not None
+    assert release.source == "sc"
 
 
 def test_categories_are_sorted_and_unique(tmp_path) -> None:
