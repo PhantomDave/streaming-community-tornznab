@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         alias="USER_AGENT",
     )
     sc_base_url: str | None = Field(default=None, alias="SC_BASE_URL")
+    animeunity_base_url: str | None = Field(default=None, alias="ANIMEUNITY_BASE_URL")
     public_url: str = Field(default="http://localhost:9118", alias="PUBLIC_URL")
     torznab_api_key: str = Field(default_factory=lambda: secrets.token_hex(16), alias="TORZNAB_API_KEY")
     qbit_username: str = Field(default="admin", alias="QBIT_USERNAME")
