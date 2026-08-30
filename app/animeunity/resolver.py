@@ -19,7 +19,7 @@ async def resolve_variants(
     season: int | None,
     episode_id: int | None,
 ) -> list[Variant]:
-    cache_key = f"playlist:{id}:{slug}:{season or 0}:{episode_id or 0}"
+    cache_key = f"animeunity:playlist:{id}:{slug}:{season or 0}:{episode_id or 0}"
     cached = client.get_cached(cache_key, playlist=True)
     if isinstance(cached, list) and cached:
         logger.debug("Playlist cache hit for %s (%d variant(s))", cache_key, len(cached))

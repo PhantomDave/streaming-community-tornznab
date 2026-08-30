@@ -73,7 +73,7 @@ def test_get_title_details_caches_payload() -> None:
     client = FakeAnimeUnityClient(json_responses={"/info_api/1469/naruto": {"episodes_count": 220}})
     payload = asyncio.run(get_title_details(client, 1469, "naruto"))
     assert payload == {"episodes_count": 220}
-    assert client.get_cached("title:1469:naruto") == {"episodes_count": 220}
+    assert client.get_cached("animeunity:title:1469:naruto") == {"episodes_count": 220}
 
 
 def test_get_season_episodes_fetches_full_flat_range_and_casts_string_numbers() -> None:
@@ -133,7 +133,7 @@ def test_resolve_variants_returns_empty_without_episode_id() -> None:
 def test_resolve_variants_uses_cache(monkeypatch) -> None:
     client = FakeAnimeUnityClient()
     cached_variant = Variant(resolution=1080, bandwidth=1000, url="https://cdn.example/v.m3u8")
-    client.set_cached("playlist:1469:naruto:0:28546", [asdict(cached_variant)], ttl=1, playlist=True)
+    client.set_cached("animeunity:playlist:1469:naruto:0:28546", [asdict(cached_variant)], ttl=1, playlist=True)
 
     async def fail_if_called(*args, **kwargs):
         raise AssertionError("should not fetch when cache hit")
@@ -161,7 +161,7 @@ def test_resolve_variants_fetches_embed_and_delegates_to_vixcloud(monkeypatch) -
     monkeypatch.setattr("app.animeunity.resolver.resolve_variants_from_embed", fake_resolve_from_embed)
     variants = asyncio.run(resolve_variants(client, id=1469, slug="naruto", season=None, episode_id=28546))
     assert variants == expected
-    assert client.get_cached("playlist:1469:naruto:0:28546", playlist=True) is not None
+    assert client.get_cached("animeunity:playlist:1469:naruto:0:28546", playlist=True) is not None
 
 
 def test_animeunity_provider_delegates_to_module_functions() -> None:

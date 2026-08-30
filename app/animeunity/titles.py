@@ -17,7 +17,7 @@ _MAX_EPISODE_WINDOW = 120
 
 
 async def get_title_details(client: AnimeUnityClient, id: int, slug: str) -> dict:
-    cache_key = f"title:{id}:{slug}"
+    cache_key = f"animeunity:title:{id}:{slug}"
     cached = client.get_cached(cache_key)
     if cached is not None:
         logger.debug("Title cache hit for %s", cache_key)
@@ -35,7 +35,7 @@ async def get_season_episodes(client: AnimeUnityClient, id: int, slug: str, seas
     # of one ID. `season` is accepted for interface parity with other
     # providers but otherwise ignored — we always fetch this ID's full,
     # flat episode range.
-    cache_key = f"season:{id}:{slug}:{season}"
+    cache_key = f"animeunity:season:{id}:{slug}:{season}"
     cached = client.get_cached(cache_key)
     if isinstance(cached, list):
         logger.debug("Season cache hit for %s", cache_key)

@@ -16,15 +16,15 @@ def _parse_feed(xml_payload: str) -> ET.Element:
 
 
 class FakeProvider(Provider):
-    source = "sc"
-
     def __init__(
         self,
         *,
+        source: str = "sc",
         search: Callable[[str], list[Title]] | None = None,
         episodes: Callable[[int, str, int], list[Episode]] | None = None,
         variants: Callable[[int, str, int | None, int | None], list[Variant]] | None = None,
     ) -> None:
+        self.source = source
         self._search = search or (lambda query: [])
         self._episodes = episodes or (lambda id, slug, season: [])
         self._variants = variants or (lambda id, slug, season, episode_id: [])
@@ -197,3 +197,45 @@ def test_torrent_download_returns_404_for_unknown_release(tmp_path) -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
+
+
+def test_torznab_search_applies_limit_per_provider_not_to_combined_result(tmp_path) -> None:
+    # limit/offset are intentionally applied per registered provider rather
+    # than to the combined multi-provider result — each source gets its own
+    # window instead of one provider's results crowding out another's. With
+    # limit=1 and two providers each returning one matching title, the feed
+    # should contain releases from both, i.e. more than `limit` releases.
+    db = Database(str(tmp_path / "torznab.db"))
+
+    def make_search(name: str) -> Callable[[str], list[Title]]:
+        def search(query: str) -> list[Title]:
+            return [Title(sc_id=1, slug=name, name=name, sc_type="movie", year=2021)]
+
+        return search
+
+    def make_variants(name: str) -> Callable[[int, str, int | None, int | None], list[Variant]]:
+        def variants(id: int, slug: str, season: int | None, episode_id: int | None) -> list[Variant]:
+            return [Variant(resolution=1080, bandwidth=2_800_000, url=f"https://cdn.example/{name}.m3u8")]
+
+        return variants
+
+    sc_provider = FakeProvider(source="sc", search=make_search("Movie.SC"), variants=make_variants("sc"))
+    animeunity_provider = FakeProvider(
+        source="animeunity", search=make_search("Movie.AnimeUnity"), variants=make_variants("animeunity")
+    )
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry(
+        {"sc": sc_provider, "animeunity": animeunity_provider}
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/torznab/api", params={"t": "search", "q": "movie", "limit": 1, "apikey": settings.torznab_api_key}
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    root = _parse_feed(response.text)
+    titles = {item.findtext("title") for item in root.findall("./channel/item")}
+    assert titles == {"Movie.SC.2021.1080p.WEB-DL.H264.ITA-SC", "Movie.AnimeUnity.2021.1080p.WEB-DL.H264.ITA-SC"}

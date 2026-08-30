@@ -41,6 +41,15 @@ class AnimeUnityClient:
     async def post_json(self, path: str, *, json_body: Any = None, headers: dict[str, str] | None = None) -> Any:
         return await self._request("POST", path, mode="json", json_body=json_body, headers=headers)
 
+    def _is_same_origin(self, path: str) -> bool:
+        # A relative path (no netloc) always targets our own base_url. An
+        # absolute URL (the vixcloud embed page, its CDN master playlist) is
+        # same-origin only if it happens to share our configured host.
+        netloc = urlparse(path).netloc
+        if not netloc:
+            return True
+        return netloc == urlparse(self._settings.animeunity_base_url or "").netloc
+
     async def _ensure_csrf(self) -> None:
         if self._csrf_token:
             return
@@ -66,26 +75,34 @@ class AnimeUnityClient:
     ) -> Any:
         if not self._settings.animeunity_base_url:
             raise RuntimeError("ANIMEUNITY_BASE_URL is not configured")
-        await self._ensure_csrf()
+        same_origin = self._is_same_origin(path)
+        if same_origin:
+            await self._ensure_csrf()
         retries = max(self._settings.max_retries, 0) + 1
         last_exc: Exception | None = None
         for attempt in range(1, retries + 1):
             try:
-                merged_headers = {
-                    "X-CSRF-TOKEN": self._csrf_token or "",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Accept": "application/json",
-                    **(headers or {}),
-                }
+                merged_headers = dict(headers or {})
+                if same_origin:
+                    # CSRF/XHR/JSON headers are only meaningful for AnimeUnity's
+                    # own API — resolve_variants also uses this client to fetch
+                    # cross-domain vixcloud/CDN URLs, which must not receive them.
+                    merged_headers = {
+                        "X-CSRF-TOKEN": self._csrf_token or "",
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Accept": "application/json",
+                        **merged_headers,
+                    }
                 logger.debug("AnimeUnity request %s %s attempt=%d/%d", method, path, attempt, retries)
                 response = await self._client.request(method, path, params=params, json=json_body, headers=merged_headers)
                 if response.status_code == 403 and self._settings.flaresolverr_url:
                     logger.warning("AnimeUnity request %s got 403, attempting FlareSolverr challenge", path)
                     await self._solve_with_flaresolverr(str(response.request.url))
-                    # A fresh cookie jar invalidates the previously scraped token.
-                    self._csrf_token = None
-                    await self._ensure_csrf()
-                    merged_headers["X-CSRF-TOKEN"] = self._csrf_token or ""
+                    if same_origin:
+                        # A fresh cookie jar invalidates the previously scraped token.
+                        self._csrf_token = None
+                        await self._ensure_csrf()
+                        merged_headers["X-CSRF-TOKEN"] = self._csrf_token or ""
                     response = await self._client.request(method, path, params=params, json=json_body, headers=merged_headers)
                 response.raise_for_status()
                 logger.debug("AnimeUnity request %s %s -> %d", method, path, response.status_code)

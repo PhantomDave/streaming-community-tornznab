@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 async def get_title_details(client: StreamingCommunityClient, sc_id: int, slug: str) -> dict:
-    cache_key = f"title:{sc_id}:{slug}"
+    cache_key = f"sc:title:{sc_id}:{slug}"
     cached = client.get_cached(cache_key)
     if cached is not None:
         logger.debug("Title cache hit for %s", cache_key)
@@ -24,7 +24,7 @@ async def get_title_details(client: StreamingCommunityClient, sc_id: int, slug: 
 
 
 async def get_season_episodes(client: StreamingCommunityClient, sc_id: int, slug: str, season: int) -> list[Episode]:
-    cache_key = f"season:{sc_id}:{slug}:{season}"
+    cache_key = f"sc:season:{sc_id}:{slug}:{season}"
     cached = client.get_cached(cache_key)
     if isinstance(cached, list):
         logger.debug("Season cache hit for %s", cache_key)

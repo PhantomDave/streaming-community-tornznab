@@ -78,6 +78,13 @@ async def torznab_api(
     title_count = 0
     for provider in registry.all():
         titles = await _safe_search(provider, query)
+        # limit/offset apply per provider, not to the combined result — each
+        # registered source gets its own window rather than one provider's
+        # results crowding out another's when multiple are configured. This
+        # means the final release count can exceed `limit` (once per provider,
+        # further multiplied by each title's resolution variants), which is
+        # accepted here the same way a single provider's variant fan-out
+        # already made `limit` a bound on titles fetched, not releases returned.
         sliced = titles[offset : offset + limit]
         title_count += len(sliced)
         releases.extend(
