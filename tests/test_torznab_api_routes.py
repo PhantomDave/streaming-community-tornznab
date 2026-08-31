@@ -239,3 +239,42 @@ def test_torznab_search_applies_limit_per_provider_not_to_combined_result(tmp_pa
     root = _parse_feed(response.text)
     titles = {item.findtext("title") for item in root.findall("./channel/item")}
     assert titles == {"Movie.SC.2021.1080p.WEB-DL.H264.ITA-SC", "Movie.AnimeUnity.2021.1080p.WEB-DL.H264.ITA-SC"}
+
+
+def test_torznab_animeunity_movie_resolves_episode_id_for_variants(tmp_path) -> None:
+    # AnimeUnity, unlike SC, has no direct-by-id embed endpoint: even a movie
+    # is a single-episode entry there, and resolve_variants needs that
+    # episode's id or it returns nothing (see resolver.py's `if not
+    # episode_id: return []`). Regression test for the bug where AnimeUnity
+    # movies were built with episode_id=None (same as SC), silently falling
+    # back to a source_url-less placeholder release that fails to download.
+    db = Database(str(tmp_path / "torznab.db"))
+
+    def fake_search(query: str) -> list[Title]:
+        return [Title(sc_id=9, slug="lupin-iii-fuga-da-alcatraz", name="Lupin III - Fuga da Alcatraz", sc_type="Movie", year=2001)]
+
+    def fake_episodes(id: int, slug: str, season: int) -> list[Episode]:
+        assert (id, slug) == (9, "lupin-iii-fuga-da-alcatraz")
+        return [Episode(id=555, number=1, name="Lupin III - Fuga da Alcatraz")]
+
+    def fake_variants(id: int, slug: str, season: int | None, episode_id: int | None) -> list[Variant]:
+        assert episode_id == 555
+        return [Variant(resolution=1080, bandwidth=2_800_000, url="https://cdn.example/lupin.m3u8")]
+
+    provider = FakeProvider(source="animeunity", search=fake_search, episodes=fake_episodes, variants=fake_variants)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry({"animeunity": provider})
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/torznab/api",
+                params={"t": "movie", "q": "Lupin III - Fuga da Alcatraz", "apikey": settings.torznab_api_key},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    root = _parse_feed(response.text)
+    items = root.findall("./channel/item")
+    assert len(items) == 1
+    assert items[0].findtext("title") == "Lupin.III.-.Fuga.da.Alcatraz.2001.1080p.WEB-DL.H264.ITA-SC"

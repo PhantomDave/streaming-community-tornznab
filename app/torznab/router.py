@@ -159,6 +159,18 @@ async def _build_releases(
             selected = next((ep_item for ep_item in episodes if ep_item.number == episode), None)
             selected_episode_id = selected.id if selected else None
             selected_episode_number = selected.number if selected else episode
+        elif title.sc_type.lower() != "tv" and provider.source == "animeunity":
+            # Unlike SC, AnimeUnity has no direct-by-id embed endpoint: even a
+            # movie is modeled there as a single-episode entry, and
+            # resolve_variants needs that episode's id to hit
+            # /embed-url/{episode_id}. Season is irrelevant for this lookup —
+            # get_season_episodes ignores it for AnimeUnity — so just fetch
+            # episode 1.
+            episodes = await _safe_episodes(provider, title.sc_id, title.slug, 1)
+            selected = next((ep_item for ep_item in episodes if ep_item.number == 1), None) or (
+                episodes[0] if episodes else None
+            )
+            selected_episode_id = selected.id if selected else None
         variants = await _safe_variants(
             provider,
             id=title.sc_id,
