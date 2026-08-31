@@ -25,11 +25,18 @@ def codec_from_variant(codecs: str) -> str:
 
 def audio_label(audio: str) -> str:
     lowered = audio.lower()
-    if "ita" in lowered and "eng" in lowered:
+    has_ita = "ita" in lowered
+    has_eng = "eng" in lowered
+    if has_ita and has_eng:
         return "MULTi"
-    if "eng" in lowered and "ita" not in lowered:
+    if has_eng:
         return "ENG"
-    return "ITA"
+    if has_ita:
+        return "ITA"
+    # Neither an Italian nor an English track (e.g. a Japanese-only anime
+    # dub): label it as subtitled rather than silently claiming ITA, which
+    # would otherwise collide with a genuine Italian dub of the same title.
+    return "SUB-ITA"
 
 
 def build_release_name(
