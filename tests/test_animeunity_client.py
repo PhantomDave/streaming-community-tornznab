@@ -1,4 +1,5 @@
 import asyncio
+import os
 import tempfile
 
 import httpx
@@ -12,7 +13,9 @@ _CSRF_HTML = '<html><head><meta name="csrf-token" content="test-token"></head></
 
 def _make_client(handler) -> AnimeUnityClient:
     settings = Settings(animeunity_base_url="https://www.animeunity.so")
-    db = Database(tempfile.mktemp(suffix=".db"))
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    db = Database(db_path)
     client = AnimeUnityClient(settings, db)
     # Swap in a MockTransport so requests never hit the network, while still
     # exercising the real _request/_is_same_origin header-scoping logic.
