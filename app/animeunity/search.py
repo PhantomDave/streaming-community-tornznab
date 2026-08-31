@@ -33,6 +33,16 @@ _STOPWORDS_IT = frozenset(
 # last-resort fallback; kept small since each one is a separate HTTP request.
 _MAX_FALLBACK_WORDS = 5
 
+# AnimeUnity catalogs the dubbed version of every title as a separate entry
+# whose title_eng carries a literal "(ITA)" suffix (e.g. "Your Name (ITA)").
+# That suffix isn't a release tag we add — it's baked into the source title —
+# but leaving it in breaks Sonarr/Radarr title matching (e.g. "Your.Name.ITA.
+# 2016..." no longer resembles the movie's real title), causing rejections
+# like "Unknown Movie. Unable to match to correct movie using release title."
+# The dub/sub distinction is preserved separately via each variant's actual
+# audio track, so the marker is redundant here and safe to strip.
+_TRAILING_DUB_MARKER_PATTERN = re.compile(r"\s*\(\s*ita\s*\)\s*$", re.IGNORECASE)
+
 
 def _strip_trailing_year(query: str) -> str:
     stripped = _TRAILING_YEAR_PATTERN.sub("", query).strip()
@@ -103,6 +113,11 @@ async def _fallback_search(client: AnimeUnityClient, query: str) -> list[dict]:
     return list(merged.values())
 
 
+def _strip_dub_marker(name: str) -> str:
+    stripped = _TRAILING_DUB_MARKER_PATTERN.sub("", name).strip()
+    return stripped or name
+
+
 async def search_titles(client: AnimeUnityClient, query: str) -> list[Title]:
     if not query.strip():
         return []
@@ -121,6 +136,7 @@ async def search_titles(client: AnimeUnityClient, query: str) -> list[Title]:
         au_type = item.get("type") or "TV"
         if not isinstance(au_id, int) or not isinstance(slug, str) or not isinstance(name, str):
             continue
+        name = _strip_dub_marker(name)
         titles.append(
             Title(sc_id=au_id, slug=slug, name=name, sc_type=au_type, source="animeunity", year=_extract_year(item), tmdb_id=None)
         )
