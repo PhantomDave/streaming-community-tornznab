@@ -19,6 +19,11 @@ services:
       - "9118:9118"
     environment:
       - SC_BASE_URL=https://streamingcommunity.example
+      # Optional: enables the AnimeUnity provider as a second content source
+      # (leave empty to run with StreamingCommunity only). Use the
+      # www-prefixed host — the bare domain 302-redirects there, which
+      # downgrades POST /livesearch requests to GET.
+      - ANIMEUNITY_BASE_URL=
       - PUBLIC_URL=http://localhost:9118
       - HOST=0.0.0.0
       - PORT=9118
