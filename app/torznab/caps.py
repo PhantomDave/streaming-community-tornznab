@@ -22,6 +22,10 @@ def build_caps_xml() -> str:
     ET.SubElement(tv, "subcat", {"id": "5030", "name": "SD"})
     ET.SubElement(tv, "subcat", {"id": "5040", "name": "HD"})
     ET.SubElement(tv, "subcat", {"id": "5045", "name": "UHD"})
-    ET.SubElement(tv, "subcat", {"id": "5070", "name": "Anime"})
+    # Declared top-level (not nested under 5000/TV) to match AnimeTosho's
+    # caps.xml — Prowlarr only picks up category 5070 as a supported/searchable
+    # category for an indexer when it appears as a top-level <category>, not
+    # as a <subcat> of TV, even though 5070 is nominally a TV subcategory.
+    ET.SubElement(categories, "category", {"id": "5070", "name": "Anime", "description": "Anime"})
 
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(caps, encoding="unicode")
