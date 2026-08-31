@@ -157,6 +157,24 @@ def test_search_titles_merges_fallback_results_across_candidates() -> None:
     assert {t.sc_id for t in titles} == {1, 2}
 
 
+def test_search_titles_survives_one_failing_fallback_candidate() -> None:
+    # Fallback candidates are probed concurrently; one raising (e.g. a
+    # transient network error) shouldn't discard results already found from
+    # the candidates that did succeed.
+    record = {"id": 2, "slug": "b", "title": None, "title_eng": "Show Two", "type": "TV", "date": "2002"}
+
+    def respond(body):
+        if body["title"] == "Alpha":
+            raise RuntimeError("boom")
+        if body["title"] == "Beta":
+            return {"records": [record]}
+        return {"records": []}
+
+    client = FakeAnimeUnityClient(json_responses={"/livesearch": respond})
+    titles = asyncio.run(search_titles(client, "Alpha - Beta"))
+    assert {t.sc_id for t in titles} == {2}
+
+
 def test_search_titles_strips_dub_marker_from_title() -> None:
     # AnimeUnity catalogs the dubbed cut of every title as a separate record
     # whose title_eng carries a literal "(ITA)" suffix baked in by the source

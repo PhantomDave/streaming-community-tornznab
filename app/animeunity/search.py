@@ -32,6 +32,9 @@ _STOPWORDS_IT = frozenset(
 # How many of a query's most distinctive words to probe individually as a
 # last-resort fallback; kept small since each one is a separate HTTP request.
 _MAX_FALLBACK_WORDS = 5
+# Segments shorter than this (e.g. the "Re" in "Re:Zero − Starting Life...")
+# are too low-signal to be worth a dedicated probe.
+_MIN_SEGMENT_LENGTH = 3
 
 # AnimeUnity catalogs the dubbed version of every title as a separate entry
 # whose title_eng carries a literal "(ITA)" suffix (e.g. "Your Name (ITA)").
@@ -55,7 +58,7 @@ def _split_segments(query: str) -> list[str]:
     for segment in _SEGMENT_SPLIT_PATTERN.split(query):
         segment = segment.strip()
         key = segment.lower()
-        if not segment or key == query.lower() or key in seen:
+        if len(segment) < _MIN_SEGMENT_LENGTH or key == query.lower() or key in seen:
             continue
         seen.add(key)
         segments.append(segment)
@@ -73,6 +76,21 @@ def _distinctive_words(query: str) -> list[str]:
         seen.add(key)
         words.append(word)
     return sorted(words, key=len, reverse=True)[:_MAX_FALLBACK_WORDS]
+
+
+def _fallback_candidates(query: str) -> list[str]:
+    # A single-word segment (e.g. "Naruto" out of "Naruto - Shippuden") can
+    # also turn up as a "distinctive word" for the same query; dedupe across
+    # both lists so it isn't probed twice.
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for candidate in _split_segments(query) + _distinctive_words(query):
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+    return candidates
 
 
 async def _livesearch(client: AnimeUnityClient, title: str) -> list[dict]:
@@ -99,7 +117,7 @@ async def _fallback_search(client: AnimeUnityClient, query: str) -> list[dict]:
     of candidates, and shouldn't discard results already found from the
     candidates that did succeed.
     """
-    candidates = _split_segments(query) + _distinctive_words(query)
+    candidates = _fallback_candidates(query)
     results = await asyncio.gather(*(_livesearch(client, candidate) for candidate in candidates), return_exceptions=True)
     merged: dict[int, dict] = {}
     for candidate, result in zip(candidates, results):
