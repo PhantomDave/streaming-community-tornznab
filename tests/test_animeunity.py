@@ -80,6 +80,26 @@ def test_search_titles_strips_trailing_year_before_querying() -> None:
         assert client.post_calls == [("/livesearch", {"title": "Lupin III Fuga da Alcatraz"})]
 
 
+def test_search_titles_strips_dub_marker_from_title() -> None:
+    # AnimeUnity catalogs the dubbed cut of every title as a separate record
+    # whose title_eng carries a literal "(ITA)" suffix baked in by the source
+    # (e.g. "Your Name (ITA)"). Left in place, that suffix breaks Radarr/
+    # Sonarr title matching against the real movie/show title.
+    client = FakeAnimeUnityClient(
+        json_responses={
+            "/livesearch": {
+                "records": [
+                    {"id": 1, "slug": "your-name", "title_eng": "Your Name", "type": "Movie", "date": "2016"},
+                    {"id": 2, "slug": "your-name-ita", "title_eng": "Your Name (ITA)", "type": "Movie", "date": "2016"},
+                    {"id": 3, "slug": "one-piece-ita", "title_eng": "One Piece (ita)", "type": "TV", "date": "1999"},
+                ]
+            }
+        }
+    )
+    titles = asyncio.run(search_titles(client, "your name"))
+    assert [title.name for title in titles] == ["Your Name", "Your Name", "One Piece"]
+
+
 def test_get_title_details_caches_payload() -> None:
     client = FakeAnimeUnityClient(json_responses={"/info_api/1469/naruto": {"episodes_count": 220}})
     payload = asyncio.run(get_title_details(client, 1469, "naruto"))
