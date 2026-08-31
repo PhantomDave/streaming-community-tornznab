@@ -69,6 +69,17 @@ def test_search_titles_parses_records() -> None:
     assert title.year == 2002
 
 
+def test_search_titles_strips_trailing_year_before_querying() -> None:
+    # Radarr/Sonarr append the release year to search terms (e.g. "Title 2001"
+    # or "Title (2001)"), but AnimeUnity's /livesearch returns zero matches
+    # for those — it only matches the bare title.
+    client = FakeAnimeUnityClient(json_responses={"/livesearch": {"records": []}})
+    for query in ["Lupin III Fuga da Alcatraz 2001", "Lupin III Fuga da Alcatraz (2001)"]:
+        client.post_calls.clear()
+        asyncio.run(search_titles(client, query))
+        assert client.post_calls == [("/livesearch", {"title": "Lupin III Fuga da Alcatraz"})]
+
+
 def test_get_title_details_caches_payload() -> None:
     client = FakeAnimeUnityClient(json_responses={"/info_api/1469/naruto": {"episodes_count": 220}})
     payload = asyncio.run(get_title_details(client, 1469, "naruto"))
