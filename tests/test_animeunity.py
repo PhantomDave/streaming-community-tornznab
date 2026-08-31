@@ -30,7 +30,8 @@ class FakeAnimeUnityClient:
 
     async def post_json(self, path, *, json_body=None, headers=None):
         self.post_calls.append((path, json_body))
-        return self._json_responses[path]
+        response = self._json_responses[path]
+        return response(json_body) if callable(response) else response
 
     def get_cached(self, cache_key, playlist=False):
         return self._cache.get(cache_key)
@@ -73,11 +74,87 @@ def test_search_titles_strips_trailing_year_before_querying() -> None:
     # Radarr/Sonarr append the release year to search terms (e.g. "Title 2001"
     # or "Title (2001)"), but AnimeUnity's /livesearch returns zero matches
     # for those — it only matches the bare title.
+    # Always empty, so every fallback probe (segments/words) also runs and
+    # comes back empty — this test only cares what the *first* call sends.
     client = FakeAnimeUnityClient(json_responses={"/livesearch": {"records": []}})
     for query in ["Lupin III Fuga da Alcatraz 2001", "Lupin III Fuga da Alcatraz (2001)"]:
         client.post_calls.clear()
         asyncio.run(search_titles(client, query))
-        assert client.post_calls == [("/livesearch", {"title": "Lupin III Fuga da Alcatraz"})]
+        assert client.post_calls[0] == ("/livesearch", {"title": "Lupin III Fuga da Alcatraz"})
+
+
+def test_search_titles_falls_back_to_subtitle_segment() -> None:
+    # AnimeUnity's /livesearch ranks by similarity rather than doing a plain
+    # substring match: a franchise prefix tacked onto an otherwise-matching
+    # subtitle can dilute the match below its threshold, even though the
+    # subtitle alone finds it immediately. Confirmed against the live site
+    # for "Lupin III - Il sigillo di sangue, la sirena dell'eternità".
+    match = {
+        "id": 6164,
+        "slug": "lupin-iii-il-sigillo-di-sangue-la-sirena-delleternita-ita",
+        "title": "Lupin III: Chi no Kokuin - Eien no Mermaid (ITA)",
+        "title_eng": "Lupin III - Il sigillo di sangue: La sirena dell'eternità (ITA)",
+        "type": "OVA",
+        "date": "2011",
+    }
+
+    def respond(body):
+        return {"records": [match] if body["title"] == "Il sigillo di sangue" else []}
+
+    client = FakeAnimeUnityClient(json_responses={"/livesearch": respond})
+    titles = asyncio.run(search_titles(client, "Lupin III - Il sigillo di sangue, la sirena dell'eternità"))
+    assert [call[1]["title"] for call in client.post_calls][:3] == [
+        "Lupin III - Il sigillo di sangue, la sirena dell'eternità",
+        "Lupin III",
+        "Il sigillo di sangue",
+    ]
+    assert len(titles) == 1
+    assert titles[0].sc_id == 6164
+
+
+def test_search_titles_falls_back_to_distinctive_word() -> None:
+    # Some AnimeUnity entries are catalogued under an English/romaji title
+    # that shares no literal phrase with the Italian title Radarr/Sonarr
+    # sends (e.g. "Il ritorno di Pycal" vs. AnimeUnity's "Return of Pycal") —
+    # only the proper noun "Pycal" survives translation and actually matches.
+    match = {
+        "id": 6948,
+        "slug": "lupin-iii-return-of-pycal-ita",
+        "title": "Lupin III: Ikiteita Majutsushi (ITA)",
+        "title_eng": "Lupin III: Return of Pycal (ITA)",
+        "type": "OVA",
+        "date": "2002",
+    }
+
+    def respond(body):
+        return {"records": [match] if body["title"] == "Pycal" else []}
+
+    client = FakeAnimeUnityClient(json_responses={"/livesearch": respond})
+    titles = asyncio.run(search_titles(client, "Lupin III - Il ritorno di Pycal"))
+    sent = [call[1]["title"] for call in client.post_calls]
+    assert sent[0] == "Lupin III - Il ritorno di Pycal"
+    assert "Pycal" in sent
+    assert len(titles) == 1
+    assert titles[0].sc_id == 6948
+
+
+def test_search_titles_merges_fallback_results_across_candidates() -> None:
+    # Different fallback candidates can each turn up a different real title;
+    # all of them should end up in the merged result set (deduped by id) so
+    # Radarr/Sonarr's own matching can pick the right one.
+    record_a = {"id": 1, "slug": "a", "title": None, "title_eng": "Show One", "type": "TV", "date": "2001"}
+    record_b = {"id": 2, "slug": "b", "title": None, "title_eng": "Show Two", "type": "TV", "date": "2002"}
+
+    def respond(body):
+        if body["title"] == "Alpha":
+            return {"records": [record_a]}
+        if body["title"] == "Beta":
+            return {"records": [record_b, record_a]}
+        return {"records": []}
+
+    client = FakeAnimeUnityClient(json_responses={"/livesearch": respond})
+    titles = asyncio.run(search_titles(client, "Alpha - Beta"))
+    assert {t.sc_id for t in titles} == {1, 2}
 
 
 def test_get_title_details_caches_payload() -> None:
