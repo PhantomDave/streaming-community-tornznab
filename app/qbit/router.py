@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Form, Query, Response
 from app.config import settings
 from app.deps import get_db, get_download_manager
 from app.db import Database
-from app.downloads.manager import DownloadManager
+from app.downloads.manager import DownloadManager, _sanitize_category
 from app.magnet import extract_infohash_from_magnet
 from app.qbit.models import to_qbit_info, to_qbit_properties
 
@@ -103,6 +103,11 @@ async def torrents_create_category(
     category: str = Form(),
     db: Database = Depends(get_db),
 ) -> Response:
+    try:
+        category = _sanitize_category(category)
+    except ValueError as exc:
+        logger.error("torrents/createCategory rejected: %s", exc)
+        return Response(content="Fails.", status_code=400)
     db.ensure_category(category)
     return Response(status_code=200)
 
@@ -113,6 +118,11 @@ async def torrents_set_category(
     category: str = Form(),
     db: Database = Depends(get_db),
 ) -> Response:
+    try:
+        category = _sanitize_category(category)
+    except ValueError as exc:
+        logger.error("torrents/setCategory rejected: %s", exc)
+        return Response(content="Fails.", status_code=400)
     db.ensure_category(category)
     for hash_value in [value.strip().lower() for value in hashes.split("|") if value.strip()]:
         db.set_job_category(hash_value, category)

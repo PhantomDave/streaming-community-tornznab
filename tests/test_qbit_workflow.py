@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
-from app.deps import get_download_manager
+from app.db import Database
+from app.deps import get_db, get_download_manager
 from app.main import app
 from app.magnet import build_magnet
 
@@ -71,6 +72,43 @@ def test_qbit_categories_endpoint_roundtrip() -> None:
         assert categories.status_code == 200
         payload = categories.json()
         assert "sonarr" in payload
+
+
+def test_qbit_create_category_rejects_path_traversal() -> None:
+    with TestClient(app) as client:
+        response = client.post("/api/v2/torrents/createCategory", data={"category": "../evil"})
+        categories = client.get("/api/v2/torrents/categories").json()
+
+    assert response.status_code == 400
+    assert response.text == "Fails."
+    assert "../evil" not in categories
+
+
+def test_qbit_set_category_rejects_path_traversal(tmp_path) -> None:
+    db = Database(str(tmp_path / "qbit.db"))
+    job = db.create_job(
+        "job-trav",
+        "travhash1",
+        "radarr",
+        str(tmp_path / "downloads" / "radarr"),
+        str(tmp_path / "downloads" / "radarr" / "release.mkv"),
+    )
+
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v2/torrents/setCategory",
+                data={"hashes": "travhash1", "category": "../../etc"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.text == "Fails."
+    refreshed = db.get_job(job.id)
+    assert refreshed is not None
+    assert refreshed.category == "radarr"
 
 
 def test_qbit_add_invalid_magnet_returns_400() -> None:
