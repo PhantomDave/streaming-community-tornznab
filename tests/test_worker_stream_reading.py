@@ -50,6 +50,28 @@ def _write_fake_ytdlp(tmp_path: Path) -> Path:
     return launcher
 
 
+def _write_fake_ytdlp_no_output(tmp_path: Path) -> Path:
+    # Mimics a disk-full/OOM-killed ffmpeg mux that still lets yt-dlp exit 0
+    # without ever producing the final output file.
+    script = tmp_path / "fake_ytdlp_no_output.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import sys
+
+            sys.stdout.write("Duration: 00:00:10.00, start: 0.0, bitrate: N/A\\n")
+            sys.stdout.flush()
+            sys.exit(0)
+            """
+        ).strip()
+        + "\n"
+    )
+    launcher = tmp_path / "fake_ytdlp_no_output"
+    launcher.write_text(f"#!/usr/bin/env python3\n{script.read_text()}")
+    launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return launcher
+
+
 def _release() -> Release:
     return Release(
         infohash="deadbeef",
@@ -196,3 +218,39 @@ async def _run_carriage_return_only_progress_test(tmp_path) -> None:
     # arrived, not just that *a* non-terminal value snuck through.
     intermediate = {value for value in seen_progress if 0.0 < value < 1.0}
     assert len(intermediate) >= 3, seen_progress
+
+
+def test_missing_output_file_is_reported_as_permanent_error(tmp_path) -> None:
+    asyncio.run(_run_missing_output_test(tmp_path))
+
+
+async def _run_missing_output_test(tmp_path) -> None:
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    settings = Settings(
+        download_path=str(tmp_path / "downloads"),
+        db_path=str(db_dir / "sctorznab.db"),
+        ytdlp_path=str(_write_fake_ytdlp_no_output(tmp_path)),
+        download_stall_timeout=5.0,
+    )
+    db = Database(settings.db_path)
+    release = _release()
+    db.upsert_release(release)
+    job = db.create_job(
+        "job-1",
+        release.infohash,
+        "radarr",
+        str(tmp_path / "downloads" / "radarr"),
+        str(tmp_path / "downloads" / "radarr" / release.release_name / f"{release.release_name}.mkv"),
+    )
+
+    await run_download_job(settings, db, job, release)
+
+    final = db.get_job(job.id)
+    assert final is not None
+    # Regression guard: _ensure_mkv previously touch()-created an empty file
+    # and reported the job as "completed" when yt-dlp exited 0 without ever
+    # producing real output (e.g. a disk-full/OOM-killed ffmpeg mux). It must
+    # now surface this as a permanent error instead.
+    assert final.state == "error"
+    assert final.error_kind == "permanent"
