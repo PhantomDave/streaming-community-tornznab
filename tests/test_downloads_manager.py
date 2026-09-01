@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import shlex
 
 from app.config import Settings
 from app.db import Database
@@ -281,7 +282,11 @@ def test_start_recovers_jobs_stuck_from_previous_run(tmp_path, monkeypatch) -> N
     # in-memory queue and process registry both start empty, so without
     # recovery that job would sit stuck in its old state forever with no
     # process actually running. start() must re-queue it.
-    monkeypatch.setattr(worker_module, "build_ytdlp_command", lambda settings, release, output_path: ["true"])
+    monkeypatch.setattr(
+        worker_module,
+        "build_ytdlp_command",
+        lambda settings, release, output_path: ["sh", "-c", f"echo fake-download-output > {shlex.quote(str(output_path))}"],
+    )
 
     manager, db = _make_manager(tmp_path)
     infohash = "stuck001"

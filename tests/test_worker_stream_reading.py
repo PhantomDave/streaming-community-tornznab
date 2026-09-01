@@ -22,6 +22,7 @@ def _write_fake_ytdlp(tmp_path: Path) -> Path:
             """
             import sys
             import time
+            from pathlib import Path
 
             sys.stdout.write("Duration: 00:00:10.00, start: 0.0, bitrate: N/A\\n")
             sys.stdout.flush()
@@ -30,6 +31,14 @@ def _write_fake_ytdlp(tmp_path: Path) -> Path:
                 sys.stdout.flush()
                 time.sleep(0.05)
             sys.stdout.write("\\n")
+
+            # Mimic yt-dlp actually producing an output file: find the "-o"
+            # template argument and materialize it with the ".mkv" extension,
+            # exactly as _ensure_mkv() expects to find it.
+            output_arg = sys.argv[sys.argv.index("-o") + 1]
+            output_path = Path(output_arg.replace("%(ext)s", "mkv"))
+            output_path.write_text("fake video data")
+
             sys.exit(0)
             """
         ).strip()
@@ -75,6 +84,7 @@ def _write_fake_ytdlp_two_tracks(tmp_path: Path) -> Path:
             """
             import sys
             import time
+            from pathlib import Path
 
             for pct in (50, 100):
                 sys.stdout.write(f"[download] {pct}.0% of 10.00MiB\\n")
@@ -84,6 +94,14 @@ def _write_fake_ytdlp_two_tracks(tmp_path: Path) -> Path:
                 sys.stdout.write(f"[download] {pct}.0% of 2.00MiB\\n")
                 sys.stdout.flush()
                 time.sleep(0.1)
+
+            # Mimic yt-dlp actually producing an output file: find the "-o"
+            # template argument and materialize it with the ".mkv" extension,
+            # exactly as _ensure_mkv() expects to find it.
+            output_arg = sys.argv[sys.argv.index("-o") + 1]
+            output_path = Path(output_arg.replace("%(ext)s", "mkv"))
+            output_path.write_text("fake video data")
+
             sys.exit(0)
             """
         ).strip()

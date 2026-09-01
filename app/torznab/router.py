@@ -156,7 +156,7 @@ async def _build_releases(
         selected_season = season
         if title.sc_type.lower() == "tv" and season is not None and episode is not None:
             episodes = await _safe_episodes(provider, title.sc_id, title.slug, season)
-            selected = next((ep_item for ep_item in episodes if ep_item.number == episode), None)
+            selected = _find_episode(episodes, episode)
             selected_episode_id = selected.id if selected else None
             selected_episode_number = selected.number if selected else episode
         elif title.sc_type.lower() != "tv" and provider.source == "animeunity":
@@ -167,9 +167,7 @@ async def _build_releases(
             # get_season_episodes ignores it for AnimeUnity — so just fetch
             # episode 1.
             episodes = await _safe_episodes(provider, title.sc_id, title.slug, 1)
-            selected = next((ep_item for ep_item in episodes if ep_item.number == 1), None) or (
-                episodes[0] if episodes else None
-            )
+            selected = _find_episode(episodes, 1) or (episodes[0] if episodes else None)
             selected_episode_id = selected.id if selected else None
         variants = await _safe_variants(
             provider,
@@ -223,6 +221,10 @@ async def _build_releases(
             db.upsert_release(release)
             releases.append(release)
     return releases
+
+
+def _find_episode(episodes: list[Episode], episode_number: int) -> Episode | None:
+    return next((ep for ep in episodes if ep.number == episode_number), None)
 
 
 def _fallback_variants() -> list[Variant]:

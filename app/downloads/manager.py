@@ -20,6 +20,17 @@ _SPEED_WINDOW_SECONDS = 15.0
 _SPEED_MIN_ELAPSED_SECONDS = 0.5
 
 
+def _sanitize_category(category: str) -> str:
+    # category comes straight from the *Arr download-client config's
+    # "Category" field and is used to build filesystem paths (save_path,
+    # content_path) below; a value containing a path separator or ".."
+    # would let it escape settings.download_path, including on later
+    # deleteFiles=true cleanup (shutil.rmtree).
+    if not category or category in {".", ".."} or "/" in category or "\\" in category:
+        raise ValueError(f"Invalid category: {category!r}")
+    return category
+
+
 class SpeedTracker:
     # Tracks a short rolling window of (monotonic_time, bytes_done) samples
     # per job so speed reflects recent throughput rather than the lifetime
@@ -153,6 +164,7 @@ class DownloadManager:
         logger.info("Download manager stopped")
 
     async def create_or_enqueue(self, *, infohash: str, category: str) -> Job:
+        category = _sanitize_category(category)
         existing = self._db.get_job_by_infohash(infohash)
         if existing:
             if existing.state in {"paused", "error"}:

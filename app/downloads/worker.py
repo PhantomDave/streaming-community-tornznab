@@ -99,6 +99,17 @@ async def run_download_job(
     if process_registry is not None:
         process_registry[job.id] = process
 
+    # A pause request may have run to completion in the window between the
+    # state="downloading" write above and create_subprocess_exec returning,
+    # finding process_registry still empty and terminating nothing. Catch
+    # that here so the just-spawned process doesn't keep running unmanaged.
+    post_spawn = db.get_job(job.id)
+    if post_spawn is None or post_spawn.state == "paused":
+        process.terminate()
+        if process_registry is not None and process_registry.get(job.id) is process:
+            process_registry.pop(job.id, None)
+        return
+
     stalled = False
     try:
         assert process.stdout is not None
@@ -191,7 +202,10 @@ async def run_download_job(
 
         code = await process.wait()
     finally:
-        if process_registry is not None:
+        # Compare-and-delete: a resumed job's new process may already have
+        # overwritten this job_id's registry entry by the time this runs, so
+        # only remove it if it still points at *this* process.
+        if process_registry is not None and process_registry.get(job.id) is process:
             process_registry.pop(job.id, None)
 
     # A pause/delete request may have terminated the process on purpose; in that
@@ -218,6 +232,11 @@ async def run_download_job(
         return
 
     final_path = _ensure_mkv(output_path)
+    if final_path is None:
+        logger.error("Job id=%s: yt-dlp exited 0 but no output file was found at %s", job.id, output_path)
+        db.record_job_failure(job.id, error="Download finished but no output file was found", error_kind="permanent")
+        return
+
     logger.info("Job id=%s: download completed, final file at %s", job.id, final_path)
     db.update_job_state(
         job.id,
@@ -266,16 +285,22 @@ def _hms_to_seconds(match: re.Match[str]) -> float:
     return int(match.group("h")) * 3600 + int(match.group("m")) * 60 + float(match.group("s"))
 
 
-def _ensure_mkv(output_path: Path) -> Path:
-    if output_path.exists():
+def _ensure_mkv(output_path: Path) -> Path | None:
+    if _is_nonempty_file(output_path):
         return output_path
     for extension in (".mp4", ".mkv", ".ts", ".webm"):
         candidate = output_path.with_suffix(extension)
-        if candidate.exists():
+        if _is_nonempty_file(candidate):
             if extension != ".mkv":
                 mkv_target = output_path
                 os.replace(candidate, mkv_target)
                 return mkv_target
             return candidate
-    output_path.touch(exist_ok=True)
-    return output_path
+    return None
+
+
+def _is_nonempty_file(path: Path) -> bool:
+    # A disk-full or OOM-killed ffmpeg can still leave a zero-byte file behind
+    # at a clean exit 0; treat that the same as "no file" instead of reporting
+    # a truncated/empty download as completed.
+    return path.exists() and path.stat().st_size > 0
