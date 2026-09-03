@@ -3,7 +3,7 @@ from dataclasses import asdict
 
 from app.animeunity.provider import AnimeUnityProvider
 from app.animeunity.resolver import resolve_variants
-from app.animeunity.search import search_titles
+from app.animeunity.search import _strip_dub_marker, search_titles
 from app.animeunity.titles import get_season_episodes, get_title_details
 from app.models import Variant
 
@@ -142,8 +142,8 @@ def test_search_titles_merges_fallback_results_across_candidates() -> None:
     # Different fallback candidates can each turn up a different real title;
     # all of them should end up in the merged result set (deduped by id) so
     # Radarr/Sonarr's own matching can pick the right one.
-    record_a = {"id": 1, "slug": "a", "title": None, "title_eng": "Show One", "type": "TV", "date": "2001"}
-    record_b = {"id": 2, "slug": "b", "title": None, "title_eng": "Show Two", "type": "TV", "date": "2002"}
+    record_a = {"id": 1, "slug": "a", "title": None, "title_eng": "Alpha Show", "type": "TV", "date": "2001"}
+    record_b = {"id": 2, "slug": "b", "title": None, "title_eng": "Beta Show", "type": "TV", "date": "2002"}
 
     def respond(body):
         if body["title"] == "Alpha":
@@ -161,7 +161,7 @@ def test_search_titles_survives_one_failing_fallback_candidate() -> None:
     # Fallback candidates are probed concurrently; one raising (e.g. a
     # transient network error) shouldn't discard results already found from
     # the candidates that did succeed.
-    record = {"id": 2, "slug": "b", "title": None, "title_eng": "Show Two", "type": "TV", "date": "2002"}
+    record = {"id": 2, "slug": "b", "title": None, "title_eng": "Beta Show", "type": "TV", "date": "2002"}
 
     def respond(body):
         if body["title"] == "Alpha":
@@ -186,13 +186,69 @@ def test_search_titles_strips_dub_marker_from_title() -> None:
                 "records": [
                     {"id": 1, "slug": "your-name", "title_eng": "Your Name", "type": "Movie", "date": "2016"},
                     {"id": 2, "slug": "your-name-ita", "title_eng": "Your Name (ITA)", "type": "Movie", "date": "2016"},
-                    {"id": 3, "slug": "one-piece-ita", "title_eng": "One Piece (ita)", "type": "TV", "date": "1999"},
+                    {"id": 3, "slug": "your-name-sequel-ita", "title_eng": "Your Name Sequel (ita)", "type": "TV", "date": "1999"},
                 ]
             }
         }
     )
     titles = asyncio.run(search_titles(client, "your name"))
-    assert [title.name for title in titles] == ["Your Name", "Your Name", "One Piece"]
+    assert [title.name for title in titles] == ["Your Name", "Your Name", "Your Name Sequel"]
+
+
+def test_strip_dub_marker_is_unconditional() -> None:
+    # Regression guard: test_search_titles_strips_dub_marker_from_title above
+    # can only observe stripping on records that also pass the relevance
+    # filter (query-unrelated records get dropped before the assertion can
+    # see them), so it can no longer prove stripping itself doesn't depend on
+    # relevance. Exercise the pure function directly instead.
+    assert _strip_dub_marker("One Piece (ITA)") == "One Piece"
+    assert _strip_dub_marker("One Piece (ita)") == "One Piece"
+    assert _strip_dub_marker("One Piece") == "One Piece"
+
+
+def test_search_titles_drops_matches_with_no_word_overlap() -> None:
+    # /livesearch also matches synopsis text, so a multi-word query where the
+    # exact phrase has no hits can return titles that share nothing with the
+    # query but a common filler word (here "vita" = "life" in "Vita da Slime").
+    client = FakeAnimeUnityClient(
+        json_responses={
+            "/livesearch": {
+                "records": [
+                    {"id": 2021, "slug": "gravitation", "title": None, "title_eng": "Gravitation", "type": "TV", "date": "2000"},
+                    {
+                        "id": 279,
+                        "slug": "that-time-i-got-reincarnated-as-a-slime",
+                        "title": "Tensei shitara Slime Datta Ken",
+                        "title_eng": "That Time I Got Reincarnated as a Slime",
+                        "type": "TV",
+                        "date": "2018",
+                    },
+                ]
+            }
+        }
+    )
+    titles = asyncio.run(search_titles(client, "Vita da Slime"))
+    assert [title.slug for title in titles] == ["that-time-i-got-reincarnated-as-a-slime"]
+
+
+def test_search_titles_filters_short_titles_that_are_also_italian_function_words() -> None:
+    # "Chi" ("who") and "Non" ("not") read like filler words but are also real,
+    # short anime titles (Chi's Sweet Home, Non Non Biyori). If they were
+    # stopwords, _significant_words("Chi") would come back empty and the
+    # relevance filter would fail open (keep everything) for exactly this
+    # kind of short/generic query — reintroducing the substring-noise bug.
+    client = FakeAnimeUnityClient(
+        json_responses={
+            "/livesearch": {
+                "records": [
+                    {"id": 1, "slug": "chis-sweet-home", "title_eng": "Chi's Sweet Home", "type": "TV", "date": "2008"},
+                    {"id": 2, "slug": "machikado-mazoku", "title_eng": "Machikado Mazoku", "type": "TV", "date": "2019"},
+                ]
+            }
+        }
+    )
+    titles = asyncio.run(search_titles(client, "Chi"))
+    assert [title.slug for title in titles] == ["chis-sweet-home"]
 
 
 def test_get_title_details_caches_payload() -> None:
@@ -293,7 +349,7 @@ def test_resolve_variants_fetches_embed_and_delegates_to_vixcloud(monkeypatch) -
 def test_animeunity_provider_delegates_to_module_functions() -> None:
     client = FakeAnimeUnityClient(
         json_responses={
-            "/livesearch": {"records": [{"id": 1, "slug": "s", "title_eng": "T", "type": "TV"}]},
+            "/livesearch": {"records": [{"id": 1, "slug": "naruto", "title_eng": "Naruto", "type": "TV"}]},
         }
     )
     provider = AnimeUnityProvider(client)
