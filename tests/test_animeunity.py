@@ -251,6 +251,26 @@ def test_search_titles_filters_short_titles_that_are_also_italian_function_words
     assert [title.slug for title in titles] == ["chis-sweet-home"]
 
 
+def test_search_titles_falls_back_to_unfiltered_when_everything_is_dropped() -> None:
+    # _is_relevant only inspects title/slug, not AnimeUnity's own "plot"
+    # synopsis field (which /livesearch also matches against). If a query
+    # only overlaps every raw match through synopsis text — never through any
+    # title/slug — the word-overlap filter would drop the whole result set,
+    # indistinguishable from "AnimeUnity genuinely found nothing". Prefer
+    # returning the unfiltered raw matches over silently reporting zero.
+    client = FakeAnimeUnityClient(
+        json_responses={
+            "/livesearch": {
+                "records": [
+                    {"id": 1, "slug": "unrelated-title", "title_eng": "Unrelated Title", "type": "TV", "date": "2020"},
+                ]
+            }
+        }
+    )
+    titles = asyncio.run(search_titles(client, "Something Else Entirely"))
+    assert [title.slug for title in titles] == ["unrelated-title"]
+
+
 def test_get_title_details_caches_payload() -> None:
     client = FakeAnimeUnityClient(json_responses={"/info_api/1469/naruto": {"episodes_count": 220}})
     payload = asyncio.run(get_title_details(client, 1469, "naruto"))

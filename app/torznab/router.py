@@ -176,8 +176,14 @@ async def _build_releases(
             season=selected_season,
             episode_id=selected_episode_id,
         )
-        selected_variants = variants or _fallback_variants()
-        for variant in selected_variants:
+        if not variants:
+            # Nothing here ever re-resolves a release's source_url after this
+            # point — run_download_job rejects an empty one outright — so a
+            # release built without a real resolved variant can never
+            # actually be downloaded. Skip it rather than advertising a
+            # release that's guaranteed to fail once grabbed.
+            continue
+        for variant in variants:
             descriptor = MagnetDescriptor(
                 source=provider.source,
                 sc_id=title.sc_id,
@@ -225,10 +231,6 @@ async def _build_releases(
 
 def _find_episode(episodes: list[Episode], episode_number: int) -> Episode | None:
     return next((ep for ep in episodes if ep.number == episode_number), None)
-
-
-def _fallback_variants() -> list[Variant]:
-    return [Variant(resolution=res, bandwidth=None, url="", codecs="avc1", audio="ITA") for res in settings.quality_list]
 
 
 def _estimate_size(bandwidth: int | None, duration_seconds: int = 5400) -> int:

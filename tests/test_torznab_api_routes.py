@@ -278,3 +278,32 @@ def test_torznab_animeunity_movie_resolves_episode_id_for_variants(tmp_path) -> 
     items = root.findall("./channel/item")
     assert len(items) == 1
     assert items[0].findtext("title") == "Lupin.III.-.Fuga.da.Alcatraz.2001.1080p.WEB-DL.H264.ITA-SC"
+
+
+def test_torznab_skips_release_when_no_variant_resolves(tmp_path) -> None:
+    # Nothing downstream (run_download_job) ever re-resolves a release's
+    # source_url after search time — it rejects an empty one outright — so a
+    # title whose variant resolution comes back empty must not produce a
+    # release at all. Doing so used to synthesize a placeholder with
+    # source_url="" that looked like a normal result but was guaranteed to
+    # fail the moment Sonarr/Radarr grabbed it.
+    db = Database(str(tmp_path / "torznab.db"))
+
+    def fake_search(query: str) -> list[Title]:
+        return [Title(sc_id=1, slug="dune", name="Dune", sc_type="movie", year=2021)]
+
+    provider = FakeProvider(source="sc", search=fake_search)  # default variants() returns []
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry({"sc": provider})
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/torznab/api", params={"t": "movie", "q": "dune", "apikey": settings.torznab_api_key}
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    root = _parse_feed(response.text)
+    assert root.findall("./channel/item") == []
+    assert db.list_releases() == []
