@@ -128,6 +128,11 @@ def _select_providers(registry: ProviderRegistry, cat: str | None) -> list[Provi
         cat_ids = {int(part) for part in cat.split(",") if part.strip()}
     except ValueError:
         return providers
+    if not cat_ids:
+        # cat carried no actual category id (e.g. "," or " ") — not the same
+        # as "Anime only". Same "can't confidently classify, don't narrow"
+        # fallback as the ValueError case above.
+        return providers
     non_anime_ids = cat_ids - {_ANIME_CATEGORY}
     if non_anime_ids:
         # Category set includes something other than pure Anime (a general

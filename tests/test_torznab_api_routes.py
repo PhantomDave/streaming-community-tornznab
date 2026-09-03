@@ -373,3 +373,41 @@ def test_torznab_mixed_category_still_queries_every_provider(tmp_path) -> None:
 
     assert response.status_code == 200
     assert set(calls) == {"sc", "animeunity"}
+
+
+def test_torznab_unparseable_category_still_queries_every_provider(tmp_path) -> None:
+    # A `cat` that can't be confidently classified as "Anime only" — either
+    # because it doesn't parse as ids at all, or because it parses to an
+    # empty set (e.g. "," or " ") — must fall back to querying every
+    # provider, the same as no category at all. Narrowing on a value that
+    # carries no real category id would silently drop SC for requests that
+    # never actually asked for anime-only results.
+    db = Database(str(tmp_path / "torznab.db"))
+    calls: list[str] = []
+
+    def make_search(name: str):
+        def search(query: str) -> list[Title]:
+            calls.append(name)
+            return []
+
+        return search
+
+    for bad_cat in ("abc", ",", " "):
+        calls.clear()
+        sc_provider = FakeProvider(source="sc", search=make_search("sc"))
+        animeunity_provider = FakeProvider(source="animeunity", search=make_search("animeunity"))
+        app.dependency_overrides[get_db] = lambda: db
+        app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry(
+            {"sc": sc_provider, "animeunity": animeunity_provider}
+        )
+        try:
+            with TestClient(app) as client:
+                response = client.get(
+                    "/torznab/api",
+                    params={"t": "tvsearch", "q": "slime", "cat": bad_cat, "apikey": settings.torznab_api_key},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert set(calls) == {"sc", "animeunity"}, f"cat={bad_cat!r} should not narrow to animeunity-only"
