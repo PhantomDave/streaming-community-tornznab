@@ -23,13 +23,18 @@ _STOPWORDS_IT = frozenset(
         "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
         "di", "del", "dello", "della", "dei", "degli", "delle",
         "e", "ed", "o", "a", "ad", "da", "in", "con", "su", "per", "tra", "fra",
-        "che", "chi", "non", "come",
         # Elided articles/prepositions ("dell'", "nell'", ...): the apostrophe
         # is a word boundary for _WORD_PATTERN, so these would otherwise slip
         # through as meaningless "distinctive" words.
         "dell", "nell", "sull", "dall", "quest",
         # English equivalents — queries aren't always Italian.
         "the", "an", "of", "on", "at", "to", "and", "or", "for",
+        # Deliberately NOT stopwords despite being common function words:
+        # "chi" ("who") and "non" ("not") are also real, short anime titles
+        # (Chi's Sweet Home, Non Non Biyori) — stopping them would empty out
+        # _significant_words() for those queries and silently disable the
+        # relevance filter below for exactly the short/generic queries most
+        # prone to needing it.
     }
 )
 # How many of a query's most distinctive words to probe individually as a
@@ -68,13 +73,17 @@ def _split_segments(query: str) -> list[str]:
     return segments
 
 
+def _is_significant_word(word: str) -> bool:
+    return len(word) >= 3 and word.lower() not in _STOPWORDS_IT
+
+
 def _distinctive_words(query: str) -> list[str]:
     seen: set[str] = set()
     words: list[str] = []
     query_key = query.lower()
     for word in _WORD_PATTERN.findall(query):
         key = word.lower()
-        if len(word) < 3 or key in _STOPWORDS_IT or key in seen or key == query_key:
+        if not _is_significant_word(word) or key in seen or key == query_key:
             continue
         seen.add(key)
         words.append(word)
@@ -140,7 +149,7 @@ def _strip_dub_marker(name: str) -> str:
 
 
 def _significant_words(text: str) -> set[str]:
-    return {w for w in _WORD_PATTERN.findall(text.lower()) if len(w) >= 3 and w not in _STOPWORDS_IT}
+    return {w for w in _WORD_PATTERN.findall(text.lower()) if _is_significant_word(w)}
 
 
 def _is_relevant(query_words: set[str], title: Title) -> bool:
@@ -153,7 +162,7 @@ def _is_relevant(query_words: set[str], title: Title) -> bool:
     # run of letters.
     if not query_words:
         return True
-    candidate_words = _significant_words(f"{title.name} {title.slug}".replace("-", " "))
+    candidate_words = _significant_words(f"{title.name} {title.slug}")
     return not query_words.isdisjoint(candidate_words)
 
 
@@ -180,15 +189,15 @@ async def search_titles(client: AnimeUnityClient, query: str) -> list[Title]:
             Title(sc_id=au_id, slug=slug, name=name, sc_type=au_type, source="animeunity", year=_extract_year(item), tmdb_id=None)
         )
     query_words = _significant_words(search_query)
-    relevant = [title for title in titles if _is_relevant(query_words, title)]
-    dropped = len(titles) - len(relevant)
-    if dropped:
-        logger.info(
-            "AnimeUnity search %r dropped %d irrelevant raw match(es): %s",
-            query,
-            dropped,
-            [title.name for title in titles if title not in relevant],
-        )
+    relevant: list[Title] = []
+    dropped_names: list[str] = []
+    for title in titles:
+        if _is_relevant(query_words, title):
+            relevant.append(title)
+        else:
+            dropped_names.append(title.name)
+    if dropped_names:
+        logger.info("AnimeUnity search %r dropped %d irrelevant raw match(es): %s", query, len(dropped_names), dropped_names)
     logger.info("AnimeUnity search %r matched %d title(s)", query, len(relevant))
     return relevant
 
