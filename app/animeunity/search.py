@@ -23,10 +23,13 @@ _STOPWORDS_IT = frozenset(
         "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
         "di", "del", "dello", "della", "dei", "degli", "delle",
         "e", "ed", "o", "a", "ad", "da", "in", "con", "su", "per", "tra", "fra",
+        "che", "chi", "non", "come",
         # Elided articles/prepositions ("dell'", "nell'", ...): the apostrophe
         # is a word boundary for _WORD_PATTERN, so these would otherwise slip
         # through as meaningless "distinctive" words.
         "dell", "nell", "sull", "dall", "quest",
+        # English equivalents — queries aren't always Italian.
+        "the", "an", "of", "on", "at", "to", "and", "or", "for",
     }
 )
 # How many of a query's most distinctive words to probe individually as a
@@ -136,6 +139,24 @@ def _strip_dub_marker(name: str) -> str:
     return stripped or name
 
 
+def _significant_words(text: str) -> set[str]:
+    return {w for w in _WORD_PATTERN.findall(text.lower()) if len(w) >= 3 and w not in _STOPWORDS_IT}
+
+
+def _is_relevant(query_words: set[str], title: Title) -> bool:
+    # AnimeUnity's own matching (both /livesearch itself and, transitively,
+    # our word/segment fallback probes) isn't word-bounded — it happily
+    # matches a query substring against the *middle* of an unrelated word
+    # (e.g. Italian "vita" = "life" inside "graVITAtion"). Comparing whole
+    # words instead of substrings filters that noise out while still keeping
+    # genuine matches, since a real match shares an actual word, not just a
+    # run of letters.
+    if not query_words:
+        return True
+    candidate_words = _significant_words(f"{title.name} {title.slug}".replace("-", " "))
+    return not query_words.isdisjoint(candidate_words)
+
+
 async def search_titles(client: AnimeUnityClient, query: str) -> list[Title]:
     if not query.strip():
         return []
@@ -158,8 +179,18 @@ async def search_titles(client: AnimeUnityClient, query: str) -> list[Title]:
         titles.append(
             Title(sc_id=au_id, slug=slug, name=name, sc_type=au_type, source="animeunity", year=_extract_year(item), tmdb_id=None)
         )
-    logger.info("AnimeUnity search %r matched %d title(s)", query, len(titles))
-    return titles
+    query_words = _significant_words(search_query)
+    relevant = [title for title in titles if _is_relevant(query_words, title)]
+    dropped = len(titles) - len(relevant)
+    if dropped:
+        logger.info(
+            "AnimeUnity search %r dropped %d irrelevant raw match(es): %s",
+            query,
+            dropped,
+            [title.name for title in titles if title not in relevant],
+        )
+    logger.info("AnimeUnity search %r matched %d title(s)", query, len(relevant))
+    return relevant
 
 
 def _extract_year(item: dict) -> int | None:
