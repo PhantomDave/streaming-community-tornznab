@@ -16,6 +16,14 @@ from app.torznab.naming import build_release_name
 
 router = APIRouter(prefix="/torznab", tags=["torznab"])
 _DISCOVERY_TERMS = ("Dune", "Inception", "Breaking Bad", "Matrix")
+# caps.xml declares 5070 (Anime) as its own top-level category (see
+# torznab/caps.py) — AnimeUnity is the only registered provider that serves
+# it, so a request scoped to *just* that category has no business also
+# querying SC (StreamingCommunity, live-action only). Skipping SC there
+# avoids wasting an entire search's worth of live variant-resolution retries
+# on titles that were never going to match, which was slow enough to time
+# out the caller (e.g. Sonarr's own tvsearch request).
+_ANIME_CATEGORY = 5070
 logger = logging.getLogger(__name__)
 
 
@@ -58,7 +66,7 @@ async def torznab_api(
             return Response(content=build_feed_xml(query="", releases=cached_releases), media_type="application/xml")
         releases: list[Release] = []
         title_count = 0
-        for provider in registry.all():
+        for provider in _select_providers(registry, cat):
             titles = await _discover_titles(provider)
             title_count += len(titles)
             releases.extend(
@@ -76,7 +84,7 @@ async def torznab_api(
 
     releases = []
     title_count = 0
-    for provider in registry.all():
+    for provider in _select_providers(registry, cat):
         titles = await _safe_search(provider, query)
         # limit/offset apply per provider, not to the combined result — each
         # registered source gets its own window rather than one provider's
@@ -110,6 +118,23 @@ async def torrent_download(infohash: str, db: Database = Depends(get_db)) -> Res
     logger.info("Serving torrent stub for %s (%s)", infohash, release.release_name)
     payload = torrent_stub_payload(release.infohash, release.release_name)
     return Response(content=payload, media_type="application/x-bittorrent")
+
+
+def _select_providers(registry: ProviderRegistry, cat: str | None) -> list[Provider]:
+    providers = registry.all()
+    if not cat:
+        return providers
+    try:
+        cat_ids = {int(part) for part in cat.split(",") if part.strip()}
+    except ValueError:
+        return providers
+    non_anime_ids = cat_ids - {_ANIME_CATEGORY}
+    if non_anime_ids:
+        # Category set includes something other than pure Anime (a general
+        # TV/Movie category, or an unrecognized id) — keep querying every
+        # provider rather than risk narrowing a broader request.
+        return providers
+    return [provider for provider in providers if provider.source == "animeunity"]
 
 
 def _build_query(*, q: str | None, imdbid: str | None, tmdbid: str | None, tvdbid: str | None) -> str:
