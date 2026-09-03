@@ -251,6 +251,27 @@ def test_search_titles_filters_short_titles_that_are_also_italian_function_words
     assert [title.slug for title in titles] == ["chis-sweet-home"]
 
 
+def test_search_titles_drops_everything_when_the_sole_match_is_irrelevant() -> None:
+    # A single raw match sharing no word with the query is dropped just like
+    # any other irrelevant match, even though that empties the whole result
+    # set. An earlier version special-cased "the filter dropped 100%" as a
+    # signal to fall back to unfiltered results — but a single false-positive
+    # match (the exact noise _is_relevant exists to catch, e.g. "vita" inside
+    # "graVITAtion") *also* drops 100% of a one-record response, so that
+    # special case would have resurfaced pure noise instead of catching it.
+    client = FakeAnimeUnityClient(
+        json_responses={
+            "/livesearch": {
+                "records": [
+                    {"id": 1, "slug": "unrelated-title", "title_eng": "Unrelated Title", "type": "TV", "date": "2020"},
+                ]
+            }
+        }
+    )
+    titles = asyncio.run(search_titles(client, "Something Else Entirely"))
+    assert titles == []
+
+
 def test_get_title_details_caches_payload() -> None:
     client = FakeAnimeUnityClient(json_responses={"/info_api/1469/naruto": {"episodes_count": 220}})
     payload = asyncio.run(get_title_details(client, 1469, "naruto"))

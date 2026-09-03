@@ -31,7 +31,6 @@ services:
       - QBIT_USERNAME=admin
       - QBIT_PASSWORD=adminadmin
       - DOWNLOAD_PATH=/data/downloads
-      - QUALITIES=1080,720,480
       - PREFERRED_AUDIO=ita,eng
       - RELEASE_GROUP=SC
       - TMDB_API_KEY=

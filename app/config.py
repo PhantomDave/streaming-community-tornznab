@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     tmdb_api_key: str = Field(default="", alias="TMDB_API_KEY")
     release_group: str = Field(default="SC", alias="RELEASE_GROUP")
     preferred_audio: str = Field(default="ita,eng", alias="PREFERRED_AUDIO")
-    qualities: str = Field(default="1080,720,480", alias="QUALITIES")
     max_concurrent_downloads: int = Field(default=2, alias="MAX_CONCURRENT_DOWNLOADS")
     playlist_cache_ttl: int = Field(default=21600, alias="PLAYLIST_CACHE_TTL")
     title_cache_ttl: int = Field(default=3600, alias="TITLE_CACHE_TTL")
@@ -47,15 +46,6 @@ class Settings(BaseSettings):
     locale: str = Field(default="it", alias="SC_LOCALE")
     flaresolverr_url: str | None = Field(default=None, alias="FLARESOLVERR_URL")
     flaresolverr_timeout_ms: int = Field(default=60000, alias="FLARESOLVERR_TIMEOUT_MS")
-
-    @cached_property
-    def quality_list(self) -> list[int]:
-        parsed: list[int] = []
-        for value in self.qualities.split(","):
-            stripped = value.strip()
-            if stripped.isdigit():
-                parsed.append(int(stripped))
-        return parsed or [1080, 720, 480]
 
     @cached_property
     def preferred_audio_list(self) -> list[str]:

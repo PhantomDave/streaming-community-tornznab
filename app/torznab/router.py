@@ -176,8 +176,14 @@ async def _build_releases(
             season=selected_season,
             episode_id=selected_episode_id,
         )
-        selected_variants = variants or _fallback_variants()
-        for variant in selected_variants:
+        if not variants:
+            # Nothing here ever re-resolves a release's source_url after this
+            # point — run_download_job rejects an empty one outright — so a
+            # release built without a real resolved variant can never
+            # actually be downloaded. Skip it rather than advertising a
+            # release that's guaranteed to fail once grabbed.
+            continue
+        for variant in variants:
             descriptor = MagnetDescriptor(
                 source=provider.source,
                 sc_id=title.sc_id,
@@ -227,10 +233,6 @@ def _find_episode(episodes: list[Episode], episode_number: int) -> Episode | Non
     return next((ep for ep in episodes if ep.number == episode_number), None)
 
 
-def _fallback_variants() -> list[Variant]:
-    return [Variant(resolution=res, bandwidth=None, url="", codecs="avc1", audio="ITA") for res in settings.quality_list]
-
-
 def _estimate_size(bandwidth: int | None, duration_seconds: int = 5400) -> int:
     if not bandwidth:
         return 2 * 1024 * 1024 * 1024
@@ -241,6 +243,14 @@ async def _safe_episodes(provider: Provider, id: int, slug: str, season: int) ->
     try:
         return await provider.get_season_episodes(id, slug, season)
     except Exception:
+        # A caught exception here is indistinguishable downstream from "this
+        # title genuinely has no episodes" — both end up skipping the title
+        # silently. A season/episode that simply doesn't exist yet routinely
+        # raises too (e.g. a 404 from the provider site), so this logs at
+        # debug rather than warning — enable debug logging to tell a
+        # transient failure apart from an ordinary "not out yet" when
+        # investigating why a title didn't show up.
+        logger.debug("get_season_episodes failed for %s id=%s slug=%s season=%s", provider.source, id, slug, season, exc_info=True)
         return []
 
 
@@ -255,4 +265,10 @@ async def _safe_variants(
     try:
         return await provider.resolve_variants(id, slug, season, episode_id)
     except Exception:
+        # Same reasoning as _safe_episodes above: debug-level so a routine
+        # resolution miss doesn't spam logs, but still traceable when needed.
+        logger.debug(
+            "resolve_variants failed for %s id=%s slug=%s season=%s episode_id=%s",
+            provider.source, id, slug, season, episode_id, exc_info=True,
+        )
         return []

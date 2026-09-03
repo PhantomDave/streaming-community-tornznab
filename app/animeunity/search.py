@@ -196,6 +196,20 @@ async def search_titles(client: AnimeUnityClient, query: str) -> list[Title]:
             relevant.append(title)
         else:
             dropped_names.append(title.name)
+    # _is_relevant only sees title.name/slug, not AnimeUnity's own "plot"
+    # synopsis field — which its /livesearch also matches against (verified
+    # live). A genuine hit that only overlaps the query through its synopsis
+    # would be dropped here with no way to tell that apart from "AnimeUnity
+    # found nothing". An earlier version of this function returned the raw,
+    # unfiltered titles whenever the filter dropped everything, reasoning
+    # that dropping 100% of results is itself suspicious — but that fails
+    # exactly when it matters least: a query whose only raw match is a single
+    # false positive (the noise case _is_relevant exists to catch, e.g. a
+    # short query substring-matching an unrelated title's synopsis) also
+    # drops 100% of results, and would have come back unfiltered too. There's
+    # no way to tell the two cases apart from title/slug alone, so prefer the
+    # filter's judgment — a real title too obscure to share any word with the
+    # query is the rarer failure mode.
     if dropped_names:
         logger.info("AnimeUnity search %r dropped %d irrelevant raw match(es): %s", query, len(dropped_names), dropped_names)
     logger.info("AnimeUnity search %r matched %d title(s)", query, len(relevant))
