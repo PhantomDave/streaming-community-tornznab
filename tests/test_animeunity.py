@@ -251,13 +251,14 @@ def test_search_titles_filters_short_titles_that_are_also_italian_function_words
     assert [title.slug for title in titles] == ["chis-sweet-home"]
 
 
-def test_search_titles_falls_back_to_unfiltered_when_everything_is_dropped() -> None:
-    # _is_relevant only inspects title/slug, not AnimeUnity's own "plot"
-    # synopsis field (which /livesearch also matches against). If a query
-    # only overlaps every raw match through synopsis text — never through any
-    # title/slug — the word-overlap filter would drop the whole result set,
-    # indistinguishable from "AnimeUnity genuinely found nothing". Prefer
-    # returning the unfiltered raw matches over silently reporting zero.
+def test_search_titles_drops_everything_when_the_sole_match_is_irrelevant() -> None:
+    # A single raw match sharing no word with the query is dropped just like
+    # any other irrelevant match, even though that empties the whole result
+    # set. An earlier version special-cased "the filter dropped 100%" as a
+    # signal to fall back to unfiltered results — but a single false-positive
+    # match (the exact noise _is_relevant exists to catch, e.g. "vita" inside
+    # "graVITAtion") *also* drops 100% of a one-record response, so that
+    # special case would have resurfaced pure noise instead of catching it.
     client = FakeAnimeUnityClient(
         json_responses={
             "/livesearch": {
@@ -268,7 +269,7 @@ def test_search_titles_falls_back_to_unfiltered_when_everything_is_dropped() -> 
         }
     )
     titles = asyncio.run(search_titles(client, "Something Else Entirely"))
-    assert [title.slug for title in titles] == ["unrelated-title"]
+    assert titles == []
 
 
 def test_get_title_details_caches_payload() -> None:

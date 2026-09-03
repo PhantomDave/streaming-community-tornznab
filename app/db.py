@@ -190,7 +190,13 @@ class Database:
     def list_releases(self, *, limit: int = 50, offset: int = 0) -> list[Release]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM releases ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                # source_url = '' rows predate the fix that stopped writing
+                # them (a synthetic placeholder release with no real resolved
+                # stream, guaranteed to fail once grabbed) — excluded here so
+                # any such row already sitting in an existing deployment's DB
+                # stops being served, without needing a migration to delete
+                # them outright.
+                "SELECT * FROM releases WHERE source_url != '' ORDER BY created_at DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
         return [Release(**dict(row)) for row in rows]

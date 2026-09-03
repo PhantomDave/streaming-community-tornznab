@@ -362,15 +362,15 @@ flowchart LR
     C --> E[Parse #EXT-X-STREAM-INF\nRESOLUTION + BANDWIDTH]
     E --> F[(playlist_cache TTL)]
     F --> D
-    D --> G[Filtra su whitelist QUALITIES]
-    G --> H[Per ogni Variant: Release + infohash + size stimata]
+    D --> H[Per ogni Variant: Release + infohash + size stimata]
 ```
 
 - Le rendition si ricavano dal **master playlist** (`#EXT-X-STREAM-INF:RESOLUTION=1920x1080,BANDWIDTH=...`).
 - **Size stimata** = `BANDWIDTH (bit/s) × durata (s) / 8` → valore plausibile per i quality profile di *Arr.
 - **Cache** `playlist_cache` con TTL (es. 6h) per non risolibere ad ogni ricerca/grab.
-- **Performance:** per ricerche testuali multi-risultato, la risoluzione del master playlist è limitata ai
-  primi *N* titoli; oltre, si usa la **whitelist `QUALITIES`** come fallback (release emesse senza probe).
+- Se la risoluzione del master playlist fallisce (o l'episodio non esiste), il titolo viene **saltato**
+  invece di emettere una release fittizia: nulla ri-risolve `source_url` al momento del download, quindi
+  una release senza variant reali risolti sarebbe garantita fallire non appena presa in carico da Sonarr/Radarr.
 - Ogni qualità ha un `infohash` distinto → `sha1(f"{sc_id}:{season}:{ep}:{resolution}:{audio}")`.
 
 ---
@@ -493,7 +493,6 @@ flowchart TB
 | `QBIT_USERNAME` | `admin` | Utente per il login qBittorrent emulato. |
 | `QBIT_PASSWORD` | `adminadmin` | Password. |
 | `DOWNLOAD_PATH` | `/data/downloads` | Root download (condivisa con *Arr). |
-| `QUALITIES` | `1080,720,480` | Whitelist qualità per le release. |
 | `PREFERRED_AUDIO` | `ita,eng` | Ordine lingue audio preferite. |
 | `RELEASE_GROUP` | `SC` | Suffisso gruppo nei nomi release. |
 | `TMDB_API_KEY` | *(vuoto)* | Opzionale: ricerca per ID. |
@@ -695,7 +694,7 @@ flowchart LR
 |---------|---------|-------------|
 | Il sito cambia struttura API | Rotture ricerca/resolver | Layer `sc/` isolato + config; test di contratto; log chiari. |
 | Token m3u8 scaduto durante il download | Download fallito | Ri-risoluzione al retry; risoluzione *just-in-time* nel worker. |
-| Ricerche lente (probe master playlist) | Timeout Prowlarr | Cache TTL + limite probe su N titoli + fallback whitelist `QUALITIES`. |
+| Ricerche lente (probe master playlist) | Timeout Prowlarr | Cache TTL; titoli la cui risoluzione fallisce/non completa vengono omessi dal feed (mai una release fittizia). |
 | Size stimata imprecisa | Scelte quality profile errate | Stima da BANDWIDTH×durata; marcare freeleech. |
 | Path mapping errato | Import *Arr fallito | Volume `/data` identico tra i container; doc esplicita. |
 | Rate limiting del sito | Ban/errori | Backoff, UA realistico, `MAX_CONCURRENT_DOWNLOADS` basso. |

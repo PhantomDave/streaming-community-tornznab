@@ -243,6 +243,14 @@ async def _safe_episodes(provider: Provider, id: int, slug: str, season: int) ->
     try:
         return await provider.get_season_episodes(id, slug, season)
     except Exception:
+        # A caught exception here is indistinguishable downstream from "this
+        # title genuinely has no episodes" — both end up skipping the title
+        # silently. A season/episode that simply doesn't exist yet routinely
+        # raises too (e.g. a 404 from the provider site), so this logs at
+        # debug rather than warning — enable debug logging to tell a
+        # transient failure apart from an ordinary "not out yet" when
+        # investigating why a title didn't show up.
+        logger.debug("get_season_episodes failed for %s id=%s slug=%s season=%s", provider.source, id, slug, season, exc_info=True)
         return []
 
 
@@ -257,4 +265,10 @@ async def _safe_variants(
     try:
         return await provider.resolve_variants(id, slug, season, episode_id)
     except Exception:
+        # Same reasoning as _safe_episodes above: debug-level so a routine
+        # resolution miss doesn't spam logs, but still traceable when needed.
+        logger.debug(
+            "resolve_variants failed for %s id=%s slug=%s season=%s episode_id=%s",
+            provider.source, id, slug, season, episode_id, exc_info=True,
+        )
         return []
