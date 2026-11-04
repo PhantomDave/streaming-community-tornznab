@@ -28,5 +28,8 @@ class AnimeUnityProvider(Provider):
     ) -> list[Variant]:
         return await resolve_variants(self._client, id=id, slug=slug, season=season, episode_id=episode_id)
 
+    async def ping(self) -> None:
+        await self._client.ping()
+
     async def close(self) -> None:
         await self._client.close()

@@ -37,6 +37,11 @@ def build_feed_xml(*, query: str, releases: list[Release]) -> str:
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(rss, encoding="unicode")
 
 
+def build_error_xml(*, code: int, description: str) -> str:
+    error = ET.Element("error", {"code": str(code), "description": description})
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(error, encoding="unicode")
+
+
 def _format_date(raw: str) -> str:
     try:
         dt = datetime.fromisoformat(raw)

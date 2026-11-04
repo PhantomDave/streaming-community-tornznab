@@ -4,6 +4,7 @@ from fastapi import Request
 
 from app.db import Database
 from app.downloads.manager import DownloadManager
+from app.health import HealthMonitor
 from app.provider import ProviderRegistry
 
 
@@ -17,3 +18,7 @@ def get_provider_registry(request: Request) -> ProviderRegistry:
 
 def get_download_manager(request: Request) -> DownloadManager:
     return request.app.state.download_manager
+
+
+def get_health_monitor(request: Request) -> HealthMonitor:
+    return request.app.state.health_monitor

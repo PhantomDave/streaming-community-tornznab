@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     locale: str = Field(default="it", alias="SC_LOCALE")
     flaresolverr_url: str | None = Field(default=None, alias="FLARESOLVERR_URL")
     flaresolverr_timeout_ms: int = Field(default=60000, alias="FLARESOLVERR_TIMEOUT_MS")
+    health_check_interval: float = Field(default=300.0, alias="HEALTH_CHECK_INTERVAL")
 
     @cached_property
     def preferred_audio_list(self) -> list[str]:

@@ -32,6 +32,16 @@ class AnimeUnityClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def ping(self) -> None:
+        if not self._settings.animeunity_base_url:
+            raise RuntimeError("ANIMEUNITY_BASE_URL is not configured")
+        response = await self._client.get("/")
+        response.raise_for_status()
+        # Same check _ensure_csrf relies on: without the token every
+        # /livesearch call fails, so a page lacking it is as good as down.
+        if not _CSRF_META_PATTERN.search(response.text):
+            raise RuntimeError("AnimeUnity homepage did not include a csrf-token meta tag")
+
     async def get_json(self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> Any:
         return await self._request("GET", path, mode="json", params=params, headers=headers)
 

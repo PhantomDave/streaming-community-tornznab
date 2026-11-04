@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.config import settings
 from app.models import Episode, Title, Variant
 from app.provider import Provider
 from app.sc.client import StreamingCommunityClient
@@ -27,6 +28,12 @@ class SCProvider(Provider):
         self, id: int, slug: str, season: int | None, episode_id: int | None
     ) -> list[Variant]:
         return await resolve_variants(self._client, sc_id=id, slug=slug, season=season, episode_id=episode_id)
+
+    async def ping(self) -> None:
+        # The search page is the one we actually depend on; a parked or
+        # hijacked domain answers 200 without an Inertia payload, which
+        # get_inertia_page already rejects.
+        await self._client.get_inertia_page(f"/{settings.locale}/search", params={"q": "Matrix"})
 
     async def close(self) -> None:
         await self._client.close()

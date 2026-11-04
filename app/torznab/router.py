@@ -5,13 +5,14 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.config import settings
-from app.deps import get_db, get_provider_registry
+from app.deps import get_db, get_health_monitor, get_provider_registry
 from app.db import Database
+from app.health import HealthMonitor
 from app.magnet import MagnetDescriptor, infohash_from_descriptor, torrent_stub_payload
 from app.models import Episode, Release, Title, Variant, now_utc
 from app.provider import Provider, ProviderRegistry
 from app.torznab.caps import build_caps_xml
-from app.torznab.feed import build_feed_xml
+from app.torznab.feed import build_error_xml, build_feed_xml
 from app.torznab.naming import build_release_name
 
 router = APIRouter(prefix="/torznab", tags=["torznab"])
@@ -34,6 +35,7 @@ async def torznab_api(
     ep: int | None = Query(default=None),
     db: Database = Depends(get_db),
     registry: ProviderRegistry = Depends(get_provider_registry),
+    health: HealthMonitor = Depends(get_health_monitor),
 ) -> Response:
     logger.info("Torznab request t=%s q=%r cat=%s imdbid=%s tmdbid=%s tvdbid=%s season=%s ep=%s", t, q, cat, imdbid, tmdbid, tvdbid, season, ep)
 
@@ -47,6 +49,20 @@ async def torznab_api(
     if t not in {"search", "tvsearch", "movie"}:
         logger.warning("Torznab request rejected: unsupported function t=%s", t)
         raise HTTPException(status_code=400, detail="Unsupported Torznab function")
+
+    failing = health.failing()
+    if failing:
+        # Fail loudly instead of serving cached/empty results: Prowlarr's
+        # indexer test and RSS sync hit the cached empty-query path, so this
+        # is the only way it ever learns a provider domain has died and
+        # raises its "indexer unavailable" health notification.
+        description = "; ".join(f"{source} unreachable: {status.error}" for source, status in failing.items())
+        logger.warning("Torznab request rejected: %s", description)
+        return Response(
+            content=build_error_xml(code=900, description=description),
+            status_code=503,
+            media_type="application/xml",
+        )
 
     query = _build_query(q=q, imdbid=imdbid, tmdbid=tmdbid, tvdbid=tvdbid)
     if not query:
