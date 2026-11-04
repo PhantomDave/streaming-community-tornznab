@@ -127,6 +127,26 @@ curl "http://localhost:9118/torznab/api?t=caps"
   - credentials: `QBIT_USERNAME` / `QBIT_PASSWORD`
   - category: `sonarr` or `radarr`
 
+### Provider health check
+
+StreamingCommunity and AnimeUnity change domain often. Every
+`HEALTH_CHECK_INTERVAL` seconds (default `300`, `0` disables it) the app
+pings each configured provider. While one is unreachable, or answers with a
+page that doesn't look like the real site (e.g. a parked domain):
+
+- `GET /health` returns `503` with the error for each provider. Point
+  Uptime Kuma (or a container healthcheck) at it to get alerted.
+- Torznab searches return `503` with a Torznab `<error>` instead of
+  results, including the empty-query search Prowlarr uses for its indexer
+  test and RSS sync, which is otherwise served from cache. Prowlarr marks
+  the indexer as failing and raises an "Indexers unavailable due to
+  failures" health issue, which its notification connections (Discord,
+  email, ...) can forward with "On Health Issue" enabled.
+
+When it fires, update `SC_BASE_URL`/`ANIMEUNITY_BASE_URL` and recreate the
+container (`podman-compose up -d --force-recreate sctorznab`); a plain
+restart keeps the old environment.
+
 ## Tests
 
 ### Local unit and functional tests

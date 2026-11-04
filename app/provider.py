@@ -29,6 +29,15 @@ class Provider(ABC):
         self, id: int, slug: str, season: int | None, episode_id: int | None
     ) -> list[Variant]: ...
 
+    async def ping(self) -> None:
+        """Raise if the source site is unreachable or no longer looks like itself.
+
+        Used by the background health monitor. Searches can't double as a
+        liveness probe: they swallow errors (AnimeUnity's fallback probes) or
+        get served from cache, so a dead domain would go unnoticed.
+        """
+        return None
+
     async def close(self) -> None:
         return None
 

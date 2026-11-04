@@ -55,6 +55,7 @@ services:
       # Set to http://flaresolverr:8191 if using the FlareSolverr service below
       - FLARESOLVERR_URL=
       - FLARESOLVERR_TIMEOUT_MS=60000
+      - HEALTH_CHECK_INTERVAL=300
     volumes:
       - sctorznab-db:/data/db
       - ${DOWNLOADS_HOST_PATH:-sctorznab-downloads}:/data/downloads
