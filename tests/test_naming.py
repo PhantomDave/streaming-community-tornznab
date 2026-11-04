@@ -1,5 +1,5 @@
 from app.models import Title
-from app.torznab.naming import audio_label, build_release_name
+from app.torznab.naming import audio_label, build_release_name, release_title_for_query
 
 
 def test_build_movie_release_name() -> None:
@@ -87,3 +87,19 @@ def test_build_release_name_japanese_only_audio_is_not_ita() -> None:
         release_group="SC",
     )
     assert "Some.Anime.S01E01.1080p.WEB-DL.H264.SUB-ITA-SC" == name
+
+
+def test_release_title_drops_localized_subtitle_matching_query() -> None:
+    # Sonarr drops the leading article from its search term.
+    assert release_title_for_query("The Other Bennet Sister: Orgoglio e riscatto", "Other Bennet Sister") == "The Other Bennet Sister"
+    assert release_title_for_query("Titolo - Sottotitolo", "Titolo 2024") == "Titolo"
+
+
+def test_release_title_keeps_subtitle_that_is_part_of_the_title() -> None:
+    assert release_title_for_query("Dune: Parte due", "Dune Part Two 2024") == "Dune: Parte due"
+    assert release_title_for_query("Avatar: The Last Airbender", "Avatar The Last Airbender") == "Avatar: The Last Airbender"
+
+
+def test_release_title_unchanged_without_subtitle_or_query() -> None:
+    assert release_title_for_query("Breaking Bad", "Breaking Bad") == "Breaking Bad"
+    assert release_title_for_query("The Other Bennet Sister: Orgoglio e riscatto", "") == "The Other Bennet Sister: Orgoglio e riscatto"

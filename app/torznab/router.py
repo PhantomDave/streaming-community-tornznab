@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -13,7 +14,7 @@ from app.models import Episode, Release, Title, Variant, now_utc
 from app.provider import Provider, ProviderRegistry
 from app.torznab.caps import build_caps_xml
 from app.torznab.feed import build_error_xml, build_feed_xml
-from app.torznab.naming import build_release_name
+from app.torznab.naming import build_release_name, release_title_for_query
 
 router = APIRouter(prefix="/torznab", tags=["torznab"])
 _DISCOVERY_TERMS = ("Dune", "Inception", "Breaking Bad", "Matrix")
@@ -119,6 +120,7 @@ async def torznab_api(
                 search_type=t,
                 season=season,
                 episode=ep,
+                query=query,
             )
         )
     logger.info("Torznab search t=%s q=%r built %d release(s) from %d title(s)", t, query, len(releases), title_count)
@@ -190,6 +192,7 @@ async def _build_releases(
     search_type: str,
     season: int | None,
     episode: int | None,
+    query: str = "",
 ) -> list[Release]:
     releases: list[Release] = []
     for title in titles:
@@ -242,7 +245,7 @@ async def _build_releases(
             )
             infohash = infohash_from_descriptor(descriptor)
             release_name = build_release_name(
-                title=title,
+                title=replace(title, name=release_title_for_query(title.name, query)),
                 resolution=variant.resolution,
                 codecs=variant.codecs,
                 audio=variant.audio,

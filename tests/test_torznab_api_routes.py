@@ -411,3 +411,29 @@ def test_torznab_unparseable_category_still_queries_every_provider(tmp_path) -> 
 
         assert response.status_code == 200
         assert set(calls) == {"sc", "animeunity"}, f"cat={bad_cat!r} should not narrow to animeunity-only"
+
+
+def test_tvsearch_release_name_drops_localized_subtitle(tmp_path) -> None:
+    db = Database(str(tmp_path / "torznab.db"))
+
+    def fake_search(query: str) -> list[Title]:
+        return [Title(sc_id=66210, slug="the-other-bennet-sister-orgoglio-e-riscatto", name="The Other Bennet Sister: Orgoglio e riscatto", sc_type="tv")]
+
+    provider = FakeProvider(
+        search=fake_search,
+        episodes=lambda id, slug, season: [Episode(id=371912, number=1, name="Chapter 1")],
+        variants=lambda id, slug, season, episode_id: [Variant(resolution=720, bandwidth=1_500_000, url="https://cdn.example/video.m3u8", codecs="avc1.640028")],
+    )
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry({"sc": provider})
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/torznab/api",
+                params={"t": "tvsearch", "q": "Other Bennet Sister", "season": 1, "ep": 1, "apikey": settings.torznab_api_key},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    items = _parse_feed(response.text).findall("./channel/item")
+    assert [item.findtext("title") for item in items] == ["The.Other.Bennet.Sister.S01E01.720p.WEB-DL.H264.ITA-SC"]
