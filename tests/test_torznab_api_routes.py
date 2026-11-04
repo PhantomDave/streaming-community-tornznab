@@ -307,3 +307,107 @@ def test_torznab_skips_release_when_no_variant_resolves(tmp_path) -> None:
     root = _parse_feed(response.text)
     assert root.findall("./channel/item") == []
     assert db.list_releases() == []
+
+
+def test_torznab_anime_only_category_skips_sc_provider(tmp_path) -> None:
+    # cat=5070 (Anime, see torznab/caps.py) has no business also querying SC
+    # (StreamingCommunity, live-action only) — doing so used to waste an
+    # entire search's worth of live variant-resolution retries against SC
+    # titles that were never going to be anime, slow enough to time out the
+    # caller (e.g. Sonarr's own tvsearch request for an Anime-tagged series).
+    db = Database(str(tmp_path / "torznab.db"))
+
+    def sc_search(query: str) -> list[Title]:
+        raise AssertionError("SC provider must not be queried for an Anime-only category request")
+
+    def animeunity_search(query: str) -> list[Title]:
+        return [Title(sc_id=1, slug="slime", name="Slime", sc_type="TV", source="animeunity", year=2018)]
+
+    sc_provider = FakeProvider(source="sc", search=sc_search)
+    animeunity_provider = FakeProvider(source="animeunity", search=animeunity_search)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry(
+        {"sc": sc_provider, "animeunity": animeunity_provider}
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/torznab/api",
+                params={"t": "tvsearch", "q": "slime", "cat": "5070", "apikey": settings.torznab_api_key},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+
+
+def test_torznab_mixed_category_still_queries_every_provider(tmp_path) -> None:
+    # A request whose category set mixes Anime with a general TV/Movie
+    # category (or carries an id this app doesn't recognize) keeps the
+    # original "query everything" behavior rather than risking narrowing a
+    # broader request the caller actually wanted answered by both sources.
+    db = Database(str(tmp_path / "torznab.db"))
+    calls: list[str] = []
+
+    def make_search(name: str):
+        def search(query: str) -> list[Title]:
+            calls.append(name)
+            return []
+
+        return search
+
+    sc_provider = FakeProvider(source="sc", search=make_search("sc"))
+    animeunity_provider = FakeProvider(source="animeunity", search=make_search("animeunity"))
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry(
+        {"sc": sc_provider, "animeunity": animeunity_provider}
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/torznab/api",
+                params={"t": "tvsearch", "q": "slime", "cat": "5000,5070", "apikey": settings.torznab_api_key},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert set(calls) == {"sc", "animeunity"}
+
+
+def test_torznab_unparseable_category_still_queries_every_provider(tmp_path) -> None:
+    # A `cat` that can't be confidently classified as "Anime only" — either
+    # because it doesn't parse as ids at all, or because it parses to an
+    # empty set (e.g. "," or " ") — must fall back to querying every
+    # provider, the same as no category at all. Narrowing on a value that
+    # carries no real category id would silently drop SC for requests that
+    # never actually asked for anime-only results.
+    db = Database(str(tmp_path / "torznab.db"))
+    calls: list[str] = []
+
+    def make_search(name: str):
+        def search(query: str) -> list[Title]:
+            calls.append(name)
+            return []
+
+        return search
+
+    for bad_cat in ("abc", ",", " "):
+        calls.clear()
+        sc_provider = FakeProvider(source="sc", search=make_search("sc"))
+        animeunity_provider = FakeProvider(source="animeunity", search=make_search("animeunity"))
+        app.dependency_overrides[get_db] = lambda: db
+        app.dependency_overrides[get_provider_registry] = lambda: ProviderRegistry(
+            {"sc": sc_provider, "animeunity": animeunity_provider}
+        )
+        try:
+            with TestClient(app) as client:
+                response = client.get(
+                    "/torznab/api",
+                    params={"t": "tvsearch", "q": "slime", "cat": bad_cat, "apikey": settings.torznab_api_key},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert set(calls) == {"sc", "animeunity"}, f"cat={bad_cat!r} should not narrow to animeunity-only"
